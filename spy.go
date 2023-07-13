@@ -15,9 +15,44 @@ import (
 	"time"
 )
 
+type biflow struct {
+	ipv4 gopacket.Flow
+	tcp  gopacket.Flow
+}
+
+func (b *biflow) reverse() biflow {
+	return biflow{
+		ipv4: b.ipv4.Reverse(),
+		tcp:  b.tcp.Reverse(),
+	}
+}
+
+type app struct {
+	req map[biflow]request
+	res map[biflow]response
+}
+
+func newApp() *app {
+	return &app{
+		req: make(map[biflow]request),
+		res: make(map[biflow]response),
+	}
+}
+
+type request struct {
+	inner *http.Request
+	body  []byte
+}
+
+type response struct {
+	inner *http.Response
+	body  []byte
+}
+
 type httpStream struct {
-	net, transport gopacket.Flow
-	r              tcpreader.ReaderStream
+	a *app
+	b biflow
+	r tcpreader.ReaderStream
 }
 
 func (h *httpStream) run() {
@@ -35,7 +70,7 @@ func (h *httpStream) run() {
 		r := bufio.NewReaderSize(bytes.NewReader(buffer.Bytes()), buffer.Len())
 
 		// Try to process the buffer as a request
-		handled, _ := handleRequest(r)
+		handled, _ := handleRequest(h, r)
 		if handled {
 			return
 		}
@@ -44,7 +79,7 @@ func (h *httpStream) run() {
 		r.Reset(bytes.NewReader(buffer.Bytes()))
 
 		// Try to process the buffer as a response
-		handled, resErr := handleResponse(r)
+		handled, resErr := handleResponse(h, r)
 		if resErr != nil {
 			return
 		}
@@ -56,48 +91,74 @@ func (h *httpStream) run() {
 	}
 }
 
-func handleRequest(reader *bufio.Reader) (handled bool, err error) {
+func handleRequest(h *httpStream, reader *bufio.Reader) (handled bool, err error) {
 	req, err := http.ReadRequest(reader)
 	if err != nil {
 		return false, err
 	}
 
-	_, err = io.ReadAll(req.Body)
+	body, err := io.ReadAll(req.Body)
 	defer req.Body.Close()
 	if err != nil {
 		return true, err
 	}
 
-	log.Println(req.Method, req.URL)
+	r := request{inner: req, body: body}
+	if res, ok := h.a.res[h.b.reverse()]; ok {
+		printReqRes(&r, &res)
+		delete(h.a.res, h.b.reverse())
+	} else {
+		_, ok := h.a.req[h.b]
+		if ok {
+			log.Fatal("not ok request")
+		}
+		h.a.req[h.b] = r
+	}
 	return true, nil
 }
 
-func handleResponse(reader *bufio.Reader) (handled bool, err error) {
+func handleResponse(h *httpStream, reader *bufio.Reader) (handled bool, err error) {
 	res, err := http.ReadResponse(reader, nil)
 	if err != nil {
 		return false, err
 	}
 
-	_, err = io.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
 	defer res.Body.Close()
 	if err != nil {
 		return true, err
 	}
 
-	log.Println(res.Status)
+	r := response{inner: res, body: body}
+	if req, ok := h.a.req[h.b.reverse()]; ok {
+		printReqRes(&req, &r)
+		delete(h.a.req, h.b.reverse())
+	} else {
+		_, ok := h.a.res[h.b]
+		if ok {
+			log.Fatal("not ok response")
+		}
+		h.a.res[h.b] = r
+	}
 	return true, nil
 }
 
-type httpStreamFactory struct{}
+func printReqRes(req *request, res *response) {
+	log.Println(req.inner.Method, req.inner.URL, "->", res.inner.Status)
+}
+
+type httpStreamFactory struct {
+	a *app
+}
 
 func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
-	stream := &httpStream{
-		net:       net,
-		transport: transport,
-		r:         tcpreader.NewReaderStream(),
+	s := &httpStream{
+		a: h.a,
+		b: biflow{ipv4: net, tcp: transport},
+		r: tcpreader.NewReaderStream(),
 	}
-	go stream.run()
-	return &stream.r
+	go s.run()
+	return &s.r
 }
 
 func isTcpPacket(p gopacket.Packet) bool {
@@ -130,7 +191,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	streamFactory := &httpStreamFactory{}
+	streamFactory := &httpStreamFactory{a: newApp()}
 	streamPool := tcpassembly.NewStreamPool(streamFactory)
 	assembler := tcpassembly.NewAssembler(streamPool)
 
