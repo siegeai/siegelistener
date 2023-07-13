@@ -1,4 +1,4 @@
-module spy
+module nose
 
 go 1.20
 

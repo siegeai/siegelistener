@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"flag"
+	"fmt"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
@@ -12,50 +13,53 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httputil"
 	"time"
 )
 
+// TODO stupid name
 type biflow struct {
 	ipv4 gopacket.Flow
 	tcp  gopacket.Flow
 }
 
 func (b *biflow) reverse() biflow {
-	return biflow{
-		ipv4: b.ipv4.Reverse(),
-		tcp:  b.tcp.Reverse(),
-	}
+	return biflow{ipv4: b.ipv4.Reverse(), tcp: b.tcp.Reverse()}
 }
 
-type app struct {
+// TODO stupid name, should this hold ptrs?
+type context struct {
 	req map[biflow]request
 	res map[biflow]response
 }
 
-func newApp() *app {
-	return &app{
+func newContext() *context {
+	return &context{
 		req: make(map[biflow]request),
 		res: make(map[biflow]response),
 	}
 }
 
+// TODO stupid name, parsedRequest?
 type request struct {
 	inner *http.Request
 	body  []byte
 }
 
+// TODO stupid name, parsedResponse?
 type response struct {
 	inner *http.Response
 	body  []byte
 }
 
 type httpStream struct {
-	a *app
+	a *context
 	b biflow
 	r tcpreader.ReaderStream
 }
 
 func (h *httpStream) run() {
+	// TODO how do I know if its time for this to return?
 	buffer := bytes.NewBuffer(make([]byte, 0, 4096))
 	for {
 		// Read into buffer to unblock the tcp assembler ASAP. Can I do this without
@@ -98,19 +102,20 @@ func handleRequest(h *httpStream, reader *bufio.Reader) (handled bool, err error
 	}
 
 	body, err := io.ReadAll(req.Body)
-	defer req.Body.Close()
 	if err != nil {
 		return true, err
 	}
+	defer req.Body.Close()
 
 	r := request{inner: req, body: body}
-	if res, ok := h.a.res[h.b.reverse()]; ok {
-		printReqRes(&r, &res)
-		delete(h.a.res, h.b.reverse())
+	d := h.b.reverse()
+	if res, exists := h.a.res[d]; exists {
+		handleRequestResponse(h.a, &r, &res)
+		delete(h.a.res, d)
 	} else {
-		_, ok := h.a.req[h.b]
-		if ok {
-			log.Fatal("not ok request")
+		_, exists := h.a.req[h.b]
+		if exists {
+			log.Fatal("Multiple requests before getting a response. Need a queue?")
 		}
 		h.a.req[h.b] = r
 	}
@@ -124,31 +129,44 @@ func handleResponse(h *httpStream, reader *bufio.Reader) (handled bool, err erro
 	}
 
 	body, err := io.ReadAll(res.Body)
-	defer res.Body.Close()
 	if err != nil {
 		return true, err
 	}
+	defer res.Body.Close()
 
 	r := response{inner: res, body: body}
-	if req, ok := h.a.req[h.b.reverse()]; ok {
-		printReqRes(&req, &r)
-		delete(h.a.req, h.b.reverse())
+	d := h.b.reverse()
+	if req, exists := h.a.req[d]; exists {
+		handleRequestResponse(h.a, &req, &r)
+		delete(h.a.req, d)
 	} else {
-		_, ok := h.a.res[h.b]
-		if ok {
-			log.Fatal("not ok response")
+		_, exists := h.a.res[h.b]
+		if exists {
+			log.Fatal("Multiple responses before getting a request. Need a queue?")
 		}
 		h.a.res[h.b] = r
 	}
 	return true, nil
 }
 
-func printReqRes(req *request, res *response) {
-	log.Println(req.inner.Method, req.inner.URL, "->", res.inner.Status)
+func handleRequestResponse(a *context, req *request, res *response) {
+	dump, err := httputil.DumpRequest(req.inner, false)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%s", string(dump))
+	fmt.Printf("%s\n\n", string(req.body))
+
+	dump, err = httputil.DumpResponse(res.inner, false)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%s", string(dump))
+	fmt.Printf("%s\n", string(res.body))
 }
 
 type httpStreamFactory struct {
-	a *app
+	a *context
 }
 
 func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
@@ -191,7 +209,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	streamFactory := &httpStreamFactory{a: newApp()}
+	streamFactory := &httpStreamFactory{a: newContext()}
 	streamPool := tcpassembly.NewStreamPool(streamFactory)
 	assembler := tcpassembly.NewAssembler(streamPool)
 
@@ -207,7 +225,7 @@ func main() {
 				continue
 			}
 
-			//log.Println("Got a packet", packet.Dump())
+			log.Println("Got a packet", packet.Dump())
 			//log.Println("Got a packet")
 			tcp := packet.TransportLayer().(*layers.TCP)
 			assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp, packet.Metadata().Timestamp)
