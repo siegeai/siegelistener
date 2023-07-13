@@ -21,47 +21,71 @@ type httpStream struct {
 }
 
 func (h *httpStream) run() {
-
-	var buffer bytes.Buffer
-	tee := io.TeeReader(&h.r, &buffer)
-
+	buffer := bytes.NewBuffer(make([]byte, 0, 4096))
 	for {
-		// For some reason doing request before response doesn't work (as written)
-
-		resBuf := bufio.NewReader(tee)
-		res, resErr := http.ReadResponse(resBuf, nil)
-		if resErr == io.ErrUnexpectedEOF {
-			// We must read until we see an EOF... very important!
-			// continue
-		} else if resErr != nil {
-			// log.Println("Error reading stream", h.net, h.transport, ":", err)
-		} else {
-			body, resErr := io.ReadAll(res.Body)
-			defer res.Body.Close()
-			if resErr != nil {
-				log.Println("Res error reading body:", resErr)
-			} else {
-				log.Println(h.transport, res.Status, "len(body) =", len(body))
-			}
+		// Read into buffer to unblock the tcp assembler ASAP. Can I do this without
+		// the intermediate buffer alloc in Copy?
+		_, err := io.Copy(buffer, &h.r)
+		if err != nil {
+			return
 		}
 
-		reqBuf := bufio.NewReader(&buffer)
-		req, reqErr := http.ReadRequest(reqBuf)
-		if reqErr == io.EOF {
-			// We must read until we see an EOF... very important!
-			// continue
-		} else if reqErr != nil {
-			// log.Println("Error reading stream", h.net, h.transport, ":", err)
-		} else {
-			body, reqErr := io.ReadAll(req.Body)
-			defer req.Body.Close()
-			if reqErr != nil {
-				log.Println("Req error reading body:", reqErr)
-			} else {
-				log.Println(h.transport, req.Method, req.URL, "len(body) =", len(body))
-			}
+		// Set up a bufio.Reader because http expects it. This will alloc memory and it
+		// makes me very mad.
+		r := bufio.NewReaderSize(bytes.NewReader(buffer.Bytes()), buffer.Len())
+
+		// Try to process the buffer as a request
+		handled, _ := handleRequest(r)
+		if handled {
+			return
 		}
+
+		// Reset the reader's bytes for a second pass
+		r.Reset(bytes.NewReader(buffer.Bytes()))
+
+		// Try to process the buffer as a response
+		handled, resErr := handleResponse(r)
+		if resErr != nil {
+			return
+		}
+		if handled {
+			return
+		}
+
+		return
 	}
+}
+
+func handleRequest(reader *bufio.Reader) (handled bool, err error) {
+	req, err := http.ReadRequest(reader)
+	if err != nil {
+		return false, err
+	}
+
+	_, err = io.ReadAll(req.Body)
+	defer req.Body.Close()
+	if err != nil {
+		return true, err
+	}
+
+	log.Println(req.Method, req.URL)
+	return true, nil
+}
+
+func handleResponse(reader *bufio.Reader) (handled bool, err error) {
+	res, err := http.ReadResponse(reader, nil)
+	if err != nil {
+		return false, err
+	}
+
+	_, err = io.ReadAll(res.Body)
+	defer res.Body.Close()
+	if err != nil {
+		return true, err
+	}
+
+	log.Println(res.Status)
+	return true, nil
 }
 
 type httpStreamFactory struct{}
@@ -114,7 +138,6 @@ func main() {
 	packets := packetSource.Packets()
 	ticker := time.Tick(time.Minute)
 
-	log.Println("reading in packets")
 	for {
 		select {
 		case packet := <-packets:
