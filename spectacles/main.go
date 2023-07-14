@@ -13,6 +13,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -151,27 +153,53 @@ func handleResponse(h *httpStream, reader *bufio.Reader) (handled bool, err erro
 func handleRequestResponse(a *context, req *request, res *response) {
 	log.Println("handling", req.inner.Method, req.inner.URL, "->", res.inner.Status)
 
+	arena := &fastjson.Arena{}
+
+	spec := arena.NewObject()
+	path := arena.NewObject()
+	op := arena.NewObject()
+	resp := arena.NewObject()
+	cnt := arena.NewObject()
+	ajs := arena.NewObject()
+	scm := arena.NewObject()
+
+	spec.Set(req.inner.URL.String(), path)
+	path.Set(strings.ToLower(req.inner.Method), op)
+	op.Set("responses", resp)
+
 	if len(req.body) > 0 {
 		reqVal, err := fastjson.ParseBytes(req.body)
 		if err != nil {
 			log.Println("could not parse request body because", err)
 		} else {
-			dumpJsonSchema(reqVal)
+			reqSchema, err := genSchema(arena, reqVal)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			op.Set("requestBody", reqSchema)
 		}
-	} else {
-		log.Println("empty request body")
 	}
+
+	resp.Set(strconv.Itoa(res.inner.StatusCode), cnt)
+	cnt.Set("content", ajs)
 
 	if len(res.body) > 0 {
 		resVal, err := fastjson.ParseBytes(res.body)
 		if err != nil {
 			log.Println("could not parse response body because", err)
 		} else {
-			dumpJsonSchema(resVal)
+			resSchema, err := genSchema(arena, resVal)
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			ajs.Set("application/json", scm)
+			scm.Set("schema", resSchema)
 		}
-	} else {
-		log.Println("empty response body")
 	}
+
+	log.Println(spec)
 }
 
 func dumpJsonSchema(v *fastjson.Value) {
@@ -184,6 +212,11 @@ func dumpJsonSchema(v *fastjson.Value) {
 }
 
 func genSchema(a *fastjson.Arena, v *fastjson.Value) (*fastjson.Value, error) {
+	// how to detect recursive objects?
+	// how to get a list's type?
+	// can we under-sample list items?
+	// can we do more invasive string type checks but only for a few list items?
+
 	switch v.Type() {
 	case fastjson.TypeNull:
 		// wtf should this be?
@@ -192,24 +225,31 @@ func genSchema(a *fastjson.Arena, v *fastjson.Value) (*fastjson.Value, error) {
 
 	case fastjson.TypeObject:
 		obj := a.NewObject()
+		objProps := a.NewObject()
 		obj.Set("type", a.NewString("object"))
+		obj.Set("properties", objProps)
 
 		vobj, err := v.Object()
 		if err != nil {
 			return nil, err
 		}
 
-		if vobj.Len() == 0 {
-			return obj, nil
-		}
-
-		props := a.NewObject()
-		obj.Set("properties", props)
+		var visitErr *error = nil
 
 		vobj.Visit(func(key []byte, vv *fastjson.Value) {
-			p, _ := genSchema(a, vv)
-			props.Set(string(key), p)
+			if visitErr != nil {
+				return
+			}
+			prop, err := genSchema(a, vv)
+			if err != nil {
+				visitErr = &err
+			}
+			objProps.Set(string(key), prop)
 		})
+
+		if visitErr != nil {
+			return nil, *visitErr
+		}
 
 		return obj, nil
 	case fastjson.TypeArray:
@@ -218,10 +258,13 @@ func genSchema(a *fastjson.Arena, v *fastjson.Value) (*fastjson.Value, error) {
 		obj.Set("type", a.NewString("array"))
 		return obj, nil
 	case fastjson.TypeString:
+		// quick check against known "string" types
+		// e.g., numeric, email, etc
 		obj := a.NewObject()
 		obj.Set("type", a.NewString("string"))
 		return obj, nil
 	case fastjson.TypeNumber:
+		// integer or number?
 		obj := a.NewObject()
 		obj.Set("type", a.NewString("number")) // integer?
 		return obj, nil
@@ -235,7 +278,7 @@ func genSchema(a *fastjson.Arena, v *fastjson.Value) (*fastjson.Value, error) {
 		return obj, nil
 	}
 
-	return nil, nil // TODO need an err
+	panic("Unknown v.Type()")
 }
 
 type httpStreamFactory struct {
