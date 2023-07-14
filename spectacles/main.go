@@ -4,16 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"flag"
-	"fmt"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"github.com/google/gopacket/tcpassembly"
 	"github.com/google/gopacket/tcpassembly/tcpreader"
+	"github.com/valyala/fastjson"
 	"io"
 	"log"
 	"net/http"
-	"net/http/httputil"
 	"time"
 )
 
@@ -150,19 +149,93 @@ func handleResponse(h *httpStream, reader *bufio.Reader) (handled bool, err erro
 }
 
 func handleRequestResponse(a *context, req *request, res *response) {
-	dump, err := httputil.DumpRequest(req.inner, false)
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("%s", string(dump))
-	fmt.Printf("%s\n\n", string(req.body))
+	log.Println("handling", req.inner.Method, req.inner.URL, "->", res.inner.Status)
 
-	dump, err = httputil.DumpResponse(res.inner, false)
-	if err != nil {
-		log.Fatal(err)
+	if len(req.body) > 0 {
+		reqVal, err := fastjson.ParseBytes(req.body)
+		if err != nil {
+			log.Println("could not parse request body because", err)
+		} else {
+			dumpJsonSchema(reqVal)
+		}
+	} else {
+		log.Println("empty request body")
 	}
-	fmt.Printf("%s", string(dump))
-	fmt.Printf("%s\n", string(res.body))
+
+	if len(res.body) > 0 {
+		resVal, err := fastjson.ParseBytes(res.body)
+		if err != nil {
+			log.Println("could not parse response body because", err)
+		} else {
+			dumpJsonSchema(resVal)
+		}
+	} else {
+		log.Println("empty response body")
+	}
+}
+
+func dumpJsonSchema(v *fastjson.Value) {
+	a := fastjson.Arena{}
+	z, err := genSchema(&a, v)
+	if err != nil {
+		log.Println("Could not dump begause", err)
+	}
+	log.Println(z)
+}
+
+func genSchema(a *fastjson.Arena, v *fastjson.Value) (*fastjson.Value, error) {
+	switch v.Type() {
+	case fastjson.TypeNull:
+		// wtf should this be?
+		obj := a.NewNull()
+		return obj, nil
+
+	case fastjson.TypeObject:
+		obj := a.NewObject()
+		obj.Set("type", a.NewString("object"))
+
+		vobj, err := v.Object()
+		if err != nil {
+			return nil, err
+		}
+
+		if vobj.Len() == 0 {
+			return obj, nil
+		}
+
+		props := a.NewObject()
+		obj.Set("properties", props)
+
+		vobj.Visit(func(key []byte, vv *fastjson.Value) {
+			p, _ := genSchema(a, vv)
+			props.Set(string(key), p)
+		})
+
+		return obj, nil
+	case fastjson.TypeArray:
+		// need to compute a union type of all elements in the array
+		obj := a.NewObject()
+		obj.Set("type", a.NewString("array"))
+		return obj, nil
+	case fastjson.TypeString:
+		obj := a.NewObject()
+		obj.Set("type", a.NewString("string"))
+		return obj, nil
+	case fastjson.TypeNumber:
+		obj := a.NewObject()
+		obj.Set("type", a.NewString("number")) // integer?
+		return obj, nil
+	case fastjson.TypeTrue:
+		obj := a.NewObject()
+		obj.Set("type", a.NewString("boolean"))
+		return obj, nil
+	case fastjson.TypeFalse:
+		obj := a.NewObject()
+		obj.Set("type", a.NewString("boolean"))
+		return obj, nil
+	}
+
+	return nil, nil // TODO need an err
 }
 
 type httpStreamFactory struct {
@@ -225,7 +298,12 @@ func main() {
 				continue
 			}
 
-			log.Println("Got a packet", packet.Dump())
+			// TODO
+			//  - postman sends Connection: keep-alive by default which fucks with our
+			//    assembly. Need to fix.
+			//  - http2?
+
+			//log.Println("Got a packet", packet.Dump())
 			//log.Println("Got a packet")
 			tcp := packet.TransportLayer().(*layers.TCP)
 			assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp, packet.Metadata().Timestamp)
