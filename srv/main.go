@@ -2,110 +2,122 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
-	"io/ioutil"
+	"github.com/urfave/negroni"
+	"io"
 	"log"
 	"net/http"
 
 	"github.com/gorilla/mux"
 )
 
-type event struct {
-	ID          string `json:"ID"`
-	Title       string `json:"Title"`
-	Description string `json:"Description"`
+type widget struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
 }
 
-type allEvents []event
-
-var events = allEvents{
+var widgets = []widget{
 	{
 		ID:          "1",
-		Title:       "Introduction to Golang",
-		Description: "Come join us for a chance to learn how golang works and get to eventually try it out",
+		Title:       "Jeremy Bearimy",
+		Description: "Some convoluted cyclical timeline situation",
+	},
+	{
+		ID:          "2",
+		Title:       "Gizmo",
+		Description: "This is more of a gizmo than a widget, but we'll abuse the widget system to store it here.",
 	},
 }
 
-func homeLink(w http.ResponseWriter, r *http.Request) {
-	log.Println(r.Method, r.URL, r.Proto)
+func root(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Welcome home!")
 }
 
-func createEvent(w http.ResponseWriter, r *http.Request) {
-	log.Println(r.Method, r.URL, r.Proto)
-
-	var newEvent event
-	reqBody, err := ioutil.ReadAll(r.Body)
+func createWidget(w http.ResponseWriter, r *http.Request) {
+	var newWidget widget
+	reqBody, err := io.ReadAll(r.Body)
 	if err != nil {
-		fmt.Fprintf(w, "Kindly enter data with the event title and description only in order to update")
+		fmt.Fprintf(w, "Kindly enter data with the widget title and description only in order to update")
 	}
 
-	json.Unmarshal(reqBody, &newEvent)
-	events = append(events, newEvent)
+	json.Unmarshal(reqBody, &newWidget)
+	widgets = append(widgets, newWidget)
 	w.WriteHeader(http.StatusCreated)
 
-	json.NewEncoder(w).Encode(newEvent)
+	json.NewEncoder(w).Encode(newWidget)
 }
 
-func getOneEvent(w http.ResponseWriter, r *http.Request) {
-	log.Println(r.Method, r.URL, r.Proto)
+func getWidget(w http.ResponseWriter, r *http.Request) {
+	widgetID := mux.Vars(r)["id"]
 
-	eventID := mux.Vars(r)["id"]
-
-	for _, singleEvent := range events {
-		if singleEvent.ID == eventID {
-			json.NewEncoder(w).Encode(singleEvent)
+	for _, singleWidget := range widgets {
+		if singleWidget.ID == widgetID {
+			json.NewEncoder(w).Encode(singleWidget)
 		}
 	}
 }
 
-func getAllEvents(w http.ResponseWriter, r *http.Request) {
-	log.Println(r.Method, r.URL, r.Proto)
-	json.NewEncoder(w).Encode(events)
+func getWidgets(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(widgets)
 }
 
-func updateEvent(w http.ResponseWriter, r *http.Request) {
-	log.Println(r.Method, r.URL, r.Proto)
+func updateWidget(w http.ResponseWriter, r *http.Request) {
+	widgetId := mux.Vars(r)["id"]
+	var updatedWidget widget
 
-	eventID := mux.Vars(r)["id"]
-	var updatedEvent event
-
-	reqBody, err := ioutil.ReadAll(r.Body)
+	reqBody, err := io.ReadAll(r.Body)
 	if err != nil {
-		fmt.Fprintf(w, "Kindly enter data with the event title and description only in order to update")
+		fmt.Fprintf(w, "Kindly enter data with the widget title and description only in order to update")
 	}
-	json.Unmarshal(reqBody, &updatedEvent)
 
-	for i, singleEvent := range events {
-		if singleEvent.ID == eventID {
-			singleEvent.Title = updatedEvent.Title
-			singleEvent.Description = updatedEvent.Description
-			events = append(events[:i], singleEvent)
-			json.NewEncoder(w).Encode(singleEvent)
+	json.Unmarshal(reqBody, &updatedWidget)
+
+	for i, singleWidget := range widgets {
+		if singleWidget.ID == widgetId {
+			singleWidget.Title = updatedWidget.Title
+			singleWidget.Description = updatedWidget.Description
+			widgets = append(widgets[:i], singleWidget)
+			json.NewEncoder(w).Encode(singleWidget)
 		}
 	}
 }
 
-func deleteEvent(w http.ResponseWriter, r *http.Request) {
-	log.Println(r.Method, r.URL, r.Proto)
+func deleteWidget(w http.ResponseWriter, r *http.Request) {
+	widgetId := mux.Vars(r)["id"]
 
-	eventID := mux.Vars(r)["id"]
-
-	for i, singleEvent := range events {
-		if singleEvent.ID == eventID {
-			events = append(events[:i], events[i+1:]...)
-			fmt.Fprintf(w, "The event with ID %v has been deleted successfully", eventID)
+	for i, singleWidget := range widgets {
+		if singleWidget.ID == widgetId {
+			widgets = append(widgets[:i], widgets[i+1:]...)
+			fmt.Fprintf(w, "The widget with ID %v has been deleted successfully", widgetId)
 		}
 	}
+}
+
+func logMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ww := negroni.NewResponseWriter(w)
+		next.ServeHTTP(ww, r)
+		log.Println(r.Method, r.RequestURI, r.Proto, "->", ww.Status(), http.StatusText(ww.Status()))
+	})
 }
 
 func main() {
+	host := flag.String("h", "", "the host to listen on")
+	port := flag.String("p", "80", "the port to listen on")
+	flag.Parse()
+
+	addr := fmt.Sprintf("%s:%s", *host, *port)
+	log.Println("Listening at", addr)
+
 	router := mux.NewRouter().StrictSlash(true)
-	router.HandleFunc("/", homeLink)
-	router.HandleFunc("/event", createEvent).Methods("POST")
-	router.HandleFunc("/events", getAllEvents).Methods("GET")
-	router.HandleFunc("/events/{id}", getOneEvent).Methods("GET")
-	router.HandleFunc("/events/{id}", updateEvent).Methods("PATCH")
-	router.HandleFunc("/events/{id}", deleteEvent).Methods("DELETE")
-	log.Fatal(http.ListenAndServe(":80", router))
+	router.HandleFunc("/", root)
+	router.HandleFunc("/widget", createWidget).Methods("POST")
+	router.HandleFunc("/widgets", getWidgets).Methods("GET")
+	router.HandleFunc("/widgets/{id}", getWidget).Methods("GET")
+	router.HandleFunc("/widgets/{id}", updateWidget).Methods("PATCH")
+	router.HandleFunc("/widgets/{id}", deleteWidget).Methods("DELETE")
+	router.Use(logMiddleware)
+	log.Fatal(http.ListenAndServe(addr, router))
 }

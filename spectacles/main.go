@@ -163,7 +163,8 @@ func handleRequestResponse(a *context, req *request, res *response) {
 	ajs := arena.NewObject()
 	scm := arena.NewObject()
 
-	spec.Set(req.inner.URL.String(), path)
+	// Pain point, how to detect query params vs paths?
+	spec.Set(req.inner.URL.Path, path)
 	path.Set(strings.ToLower(req.inner.Method), op)
 	op.Set("responses", resp)
 
@@ -202,15 +203,6 @@ func handleRequestResponse(a *context, req *request, res *response) {
 	log.Println(spec)
 }
 
-func dumpJsonSchema(v *fastjson.Value) {
-	a := fastjson.Arena{}
-	z, err := genSchema(&a, v)
-	if err != nil {
-		log.Println("Could not dump begause", err)
-	}
-	log.Println(z)
-}
-
 func genSchema(a *fastjson.Arena, v *fastjson.Value) (*fastjson.Value, error) {
 	// how to detect recursive objects?
 	// how to get a list's type?
@@ -220,6 +212,8 @@ func genSchema(a *fastjson.Arena, v *fastjson.Value) (*fastjson.Value, error) {
 	switch v.Type() {
 	case fastjson.TypeNull:
 		// wtf should this be?
+		// if it's a field only seen once we don't know what it is other than nullable
+		// if we see the field again in a list we may get lucky and get a type
 		obj := a.NewNull()
 		return obj, nil
 
