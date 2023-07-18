@@ -63,6 +63,8 @@ func (h *httpStream) run() {
 	// TODO how do I know if its time for this to return?
 	buffer := bytes.NewBuffer(make([]byte, 0, 4096))
 	for {
+		// TODO seems to be a bug when the Connection: keep-alive param is set.
+
 		// Read into buffer to unblock the tcp assembler ASAP. Can I do this without
 		// the intermediate buffer alloc in Copy?
 		_, err := io.Copy(buffer, &h.r)
@@ -111,7 +113,7 @@ func handleRequest(h *httpStream, reader *bufio.Reader) (handled bool, err error
 	r := request{inner: req, body: body}
 	d := h.b.reverse()
 	if res, exists := h.a.res[d]; exists {
-		handleRequestResponse(h.a, &r, &res)
+		handleRequestResponse(&r, &res)
 		delete(h.a.res, d)
 	} else {
 		_, exists := h.a.req[h.b]
@@ -138,7 +140,7 @@ func handleResponse(h *httpStream, reader *bufio.Reader) (handled bool, err erro
 	r := response{inner: res, body: body}
 	d := h.b.reverse()
 	if req, exists := h.a.req[d]; exists {
-		handleRequestResponse(h.a, &req, &r)
+		handleRequestResponse(&req, &r)
 		delete(h.a.req, d)
 	} else {
 		_, exists := h.a.res[h.b]
@@ -150,8 +152,28 @@ func handleResponse(h *httpStream, reader *bufio.Reader) (handled bool, err erro
 	return true, nil
 }
 
-func handleRequestResponse(a *context, req *request, res *response) {
+func handleRequestResponse(req *request, res *response) {
 	log.Println("handling", req.inner.Method, req.inner.URL, "->", res.inner.Status)
+
+	// What exactly should the output here be?
+	// - Could construct an openapi3 object and return that.
+	// - Could construct a custom object.
+	// - Could construct a fastjson object
+	// - Could write json to a byte buffer and have another process parse / merge that.
+	//
+	// Some inferences need access to the values, which we'll lose after writing a schema guess.
+	// So need the ability to inspect values for type membership likelihood.
+	// -> We can produce a rolling average of str -> email, phone, address, etc etc
+	//
+	// What if a query param leaks private data? Seems like bad api design. No way to
+	// avoid?
+	//
+	// If the server responds with anything other than a 200, the request schema is sus.
+	// If there is a large divergence between non-200 request bodies and 200 request bodies
+	// we shouldn't try to merge them we should just trash the non-200 bodies.
+	//
+	// Question is, do we need access to the current best estimate to inform the output
+	// of this step? Not sure.
 
 	arena := &fastjson.Arena{}
 
