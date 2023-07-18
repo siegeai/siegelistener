@@ -12,6 +12,25 @@ import (
 	"github.com/gorilla/mux"
 )
 
+func main() {
+	host := flag.String("h", "", "the host to listen on")
+	port := flag.String("p", "80", "the port to listen on")
+	flag.Parse()
+
+	addr := fmt.Sprintf("%s:%s", *host, *port)
+	log.Println("Listening at", addr)
+
+	router := mux.NewRouter().StrictSlash(true)
+	router.HandleFunc("/", root)
+	router.HandleFunc("/widget", createWidget).Methods("POST")
+	router.HandleFunc("/widgets", getWidgets).Methods("GET")
+	router.HandleFunc("/widgets/{id}", getWidget).Methods("GET")
+	router.HandleFunc("/widgets/{id}", updateWidget).Methods("PATCH")
+	router.HandleFunc("/widgets/{id}", deleteWidget).Methods("DELETE")
+	router.Use(logMiddleware)
+	log.Fatal(http.ListenAndServe(addr, router))
+}
+
 type widget struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
@@ -101,23 +120,4 @@ func logMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(ww, r)
 		log.Println(r.Method, r.RequestURI, r.Proto, "->", ww.Status(), http.StatusText(ww.Status()))
 	})
-}
-
-func main() {
-	host := flag.String("h", "", "the host to listen on")
-	port := flag.String("p", "80", "the port to listen on")
-	flag.Parse()
-
-	addr := fmt.Sprintf("%s:%s", *host, *port)
-	log.Println("Listening at", addr)
-
-	router := mux.NewRouter().StrictSlash(true)
-	router.HandleFunc("/", root)
-	router.HandleFunc("/widget", createWidget).Methods("POST")
-	router.HandleFunc("/widgets", getWidgets).Methods("GET")
-	router.HandleFunc("/widgets/{id}", getWidget).Methods("GET")
-	router.HandleFunc("/widgets/{id}", updateWidget).Methods("PATCH")
-	router.HandleFunc("/widgets/{id}", deleteWidget).Methods("DELETE")
-	router.Use(logMiddleware)
-	log.Fatal(http.ListenAndServe(addr, router))
 }

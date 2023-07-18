@@ -18,6 +18,61 @@ import (
 	"time"
 )
 
+func main() {
+	iface := flag.String("i", "eth0", "Interface to get packets from")
+	fname := flag.String("r", "", "Filename to read from, overrides -i")
+	flag.Parse()
+
+	var handle *pcap.Handle
+	var err error
+	if *fname != "" {
+		log.Printf("Reading from pcap dump %q", *fname)
+		handle, err = pcap.OpenOffline(*fname)
+	} else {
+		log.Printf("Starting capture on interface %q", *iface)
+		handle, err = pcap.OpenLive(*iface, 4096, true, pcap.BlockForever)
+	}
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if err := handle.SetBPFFilter("tcp and port 80"); err != nil {
+		log.Fatal(err)
+	}
+
+	streamFactory := &httpStreamFactory{a: newContext()}
+	streamPool := tcpassembly.NewStreamPool(streamFactory)
+	assembler := tcpassembly.NewAssembler(streamPool)
+
+	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
+	packets := packetSource.Packets()
+	ticker := time.Tick(time.Minute)
+
+	for {
+		select {
+		case packet := <-packets:
+			// If the filter only picks up tcp packets maybe we don't actually need this
+			if !isTcpPacket(packet) {
+				continue
+			}
+
+			// TODO
+			//  - postman sends Connection: keep-alive by default which fucks with our
+			//    assembly. Need to fix.
+			//  - http2?
+
+			//log.Println("Got a packet", packet.Dump())
+			//log.Println("Got a packet")
+			tcp := packet.TransportLayer().(*layers.TCP)
+			assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp, packet.Metadata().Timestamp)
+
+		case <-ticker:
+			assembler.FlushOlderThan(time.Now().Add(time.Minute * -2))
+		}
+	}
+}
+
 // TODO stupid name
 type biflow struct {
 	ipv4 gopacket.Flow
@@ -316,59 +371,4 @@ func isTcpPacket(p gopacket.Packet) bool {
 		p.NetworkLayer() != nil &&
 		p.TransportLayer() != nil &&
 		p.TransportLayer().LayerType() == layers.LayerTypeTCP
-}
-
-func main() {
-	var iface = flag.String("i", "eth0", "Interface to get packets from")
-	var fname = flag.String("r", "", "Filename to read from, overrides -i")
-	flag.Parse()
-
-	var handle *pcap.Handle
-	var err error
-	if *fname != "" {
-		log.Printf("Reading from pcap dump %q", *fname)
-		handle, err = pcap.OpenOffline(*fname)
-	} else {
-		log.Printf("Starting capture on interface %q", *iface)
-		handle, err = pcap.OpenLive(*iface, 4096, true, pcap.BlockForever)
-	}
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	if err := handle.SetBPFFilter("tcp and port 80"); err != nil {
-		log.Fatal(err)
-	}
-
-	streamFactory := &httpStreamFactory{a: newContext()}
-	streamPool := tcpassembly.NewStreamPool(streamFactory)
-	assembler := tcpassembly.NewAssembler(streamPool)
-
-	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
-	packets := packetSource.Packets()
-	ticker := time.Tick(time.Minute)
-
-	for {
-		select {
-		case packet := <-packets:
-			// If the filter only picks up tcp packets maybe we don't actually need this
-			if !isTcpPacket(packet) {
-				continue
-			}
-
-			// TODO
-			//  - postman sends Connection: keep-alive by default which fucks with our
-			//    assembly. Need to fix.
-			//  - http2?
-
-			//log.Println("Got a packet", packet.Dump())
-			//log.Println("Got a packet")
-			tcp := packet.TransportLayer().(*layers.TCP)
-			assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp, packet.Metadata().Timestamp)
-
-		case <-ticker:
-			assembler.FlushOlderThan(time.Now().Add(time.Minute * -2))
-		}
-	}
 }
