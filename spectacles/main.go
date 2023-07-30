@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"siege/jsonschema"
 	"strconv"
 	"strings"
 	"time"
@@ -246,6 +247,8 @@ func handleRequestResponse(req *request, res *response) {
 	op.Set("responses", resp)
 
 	if len(req.body) > 0 {
+		_, _ = jsonschema.ParseBytes(req.body)
+
 		reqVal, err := fastjson.ParseBytes(req.body)
 		if err != nil {
 			log.Println("could not parse request body because", err)
@@ -263,6 +266,8 @@ func handleRequestResponse(req *request, res *response) {
 	cnt.Set("content", ajs)
 
 	if len(res.body) > 0 {
+		_, _ = jsonschema.ParseBytes(res.body)
+
 		resVal, err := fastjson.ParseBytes(res.body)
 		if err != nil {
 			log.Println("could not parse response body because", err)
