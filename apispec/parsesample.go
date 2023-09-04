@@ -4,22 +4,19 @@ import (
 	"github.com/valyala/fastjson"
 )
 
-func ParseSampleBodyBytes(b []byte) (*Schema, error) {
+func ParseSampleBodyBytes(b []byte) (Schema, error) {
 	return parseSampleBodyBytesUsingFastJson(b)
 }
 
-func ParseSampleBodyFastJson(v *fastjson.Value) (*Schema, error) {
+func ParseSampleBodyFastJson(v *fastjson.Value) (Schema, error) {
 	n, err := parseFastJsonValue(v)
 	if err != nil {
 		return nil, err
 	}
-	s := Schema{
-		Root: n,
-	}
-	return &s, nil
+	return n, nil
 }
 
-func parseSampleBodyBytesUsingFastJson(b []byte) (*Schema, error) {
+func parseSampleBodyBytesUsingFastJson(b []byte) (Schema, error) {
 	v, err := fastjson.ParseBytes(b)
 	if err != nil {
 		return nil, err
@@ -27,7 +24,7 @@ func parseSampleBodyBytesUsingFastJson(b []byte) (*Schema, error) {
 	return ParseSampleBodyFastJson(v)
 }
 
-func parseFastJsonValue(v *fastjson.Value) (Node, error) {
+func parseFastJsonValue(v *fastjson.Value) (Schema, error) {
 	switch v.Type() {
 	case fastjson.TypeObject:
 		o, err := v.Object()
@@ -57,9 +54,9 @@ func parseFastJsonValue(v *fastjson.Value) (Node, error) {
 	panic("should be unreachable")
 }
 
-func parseFastJsonObject(o *fastjson.Object) (Node, error) {
-	n := ObjectNode{
-		Fields: make([]ObjectNodeField, 0),
+func parseFastJsonObject(o *fastjson.Object) (Schema, error) {
+	n := ObjectSchema{
+		Fields: make([]ObjectSchemaField, 0),
 	}
 
 	var visitErr error
@@ -73,11 +70,10 @@ func parseFastJsonObject(o *fastjson.Object) (Node, error) {
 			return
 		}
 
-		f := ObjectNodeField{
+		f := ObjectSchemaField{
 			Key:      string(key),
 			Value:    child,
 			Required: true,
-			Nullable: false,
 		}
 
 		n.Fields = append(n.Fields, f)
@@ -86,15 +82,29 @@ func parseFastJsonObject(o *fastjson.Object) (Node, error) {
 	return &n, visitErr
 }
 
-func parseFastJsonArray(vs []*fastjson.Value) (Node, error) {
-	n := ArrayNode{
-		Element: nil,
+func parseFastJsonArray(vs []*fastjson.Value) (Schema, error) {
+	var err error
+	var res Schema
+
+	for _, v := range vs {
+		var tmp Schema
+		tmp, err = parseFastJsonValue(v)
+		if err != nil {
+			break
+		}
+		res = Merge(res, tmp)
 	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	n := ArraySchema{Element: res}
 	return &n, nil
 }
 
-func parseFastJsonString(s string) (Node, error) {
-	n := ValueNode{
+func parseFastJsonString(s string) (Schema, error) {
+	n := ValueSchema{
 		MaybeString: true,
 		MaybeNumber: false,
 		MaybeBool:   false,
@@ -103,8 +113,8 @@ func parseFastJsonString(s string) (Node, error) {
 	return &n, nil
 }
 
-func parseFastJsonNumber() (Node, error) {
-	n := ValueNode{
+func parseFastJsonNumber() (Schema, error) {
+	n := ValueSchema{
 		MaybeString: false,
 		MaybeNumber: true,
 		MaybeBool:   false,
@@ -113,8 +123,8 @@ func parseFastJsonNumber() (Node, error) {
 	return &n, nil
 }
 
-func parseFastJsonBool() (Node, error) {
-	n := ValueNode{
+func parseFastJsonBool() (Schema, error) {
+	n := ValueSchema{
 		MaybeString: false,
 		MaybeNumber: false,
 		MaybeBool:   true,
@@ -123,8 +133,8 @@ func parseFastJsonBool() (Node, error) {
 	return &n, nil
 }
 
-func parseFastJsonNull() (Node, error) {
-	n := ValueNode{
+func parseFastJsonNull() (Schema, error) {
+	n := ValueSchema{
 		MaybeString: false,
 		MaybeNumber: false,
 		MaybeBool:   false,
