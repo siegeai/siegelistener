@@ -5,20 +5,16 @@ import (
 	"testing"
 )
 
-func makeStringValue() *ValueSchema {
-	return &ValueSchema{MaybeString: true, MaybeNumber: false, MaybeBool: false, MaybeNull: false}
-}
-
 func TestMergeObjectsSame(t *testing.T) {
 	a := ObjectSchema{Fields: []ObjectSchemaField{{
 		Key:      "aaa",
-		Value:    makeStringValue(),
+		Value:    NewValueSchemaString(),
 		Required: true,
 	}}}
 
 	b := ObjectSchema{Fields: []ObjectSchemaField{{
 		Key:      "aaa",
-		Value:    makeStringValue(),
+		Value:    NewValueSchemaString(),
 		Required: true,
 	}}}
 
@@ -36,13 +32,13 @@ func TestMergeObjectsSame(t *testing.T) {
 func TestMergeObjectsDifferent(t *testing.T) {
 	a := ObjectSchema{Fields: []ObjectSchemaField{{
 		Key:      "aaa",
-		Value:    makeStringValue(),
+		Value:    NewValueSchemaString(),
 		Required: true,
 	}}}
 
 	b := ObjectSchema{Fields: []ObjectSchemaField{{
 		Key:      "bbb",
-		Value:    makeStringValue(),
+		Value:    NewValueSchemaString(),
 		Required: true,
 	}}}
 

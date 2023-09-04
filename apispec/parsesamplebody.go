@@ -79,7 +79,11 @@ func parseFastJsonObject(o *fastjson.Object) (Schema, error) {
 		n.Fields = append(n.Fields, f)
 	})
 
-	return &n, visitErr
+	if visitErr != nil {
+		return nil, visitErr
+	}
+
+	return &n, nil
 }
 
 func parseFastJsonArray(vs []*fastjson.Value) (Schema, error) {
@@ -104,41 +108,17 @@ func parseFastJsonArray(vs []*fastjson.Value) (Schema, error) {
 }
 
 func parseFastJsonString(s string) (Schema, error) {
-	n := ValueSchema{
-		MaybeString: true,
-		MaybeNumber: false,
-		MaybeBool:   false,
-		MaybeNull:   false,
-	}
-	return &n, nil
+	return NewValueSchemaString(), nil
 }
 
 func parseFastJsonNumber() (Schema, error) {
-	n := ValueSchema{
-		MaybeString: false,
-		MaybeNumber: true,
-		MaybeBool:   false,
-		MaybeNull:   false,
-	}
-	return &n, nil
+	return NewValueSchemaNumber(), nil
 }
 
 func parseFastJsonBool() (Schema, error) {
-	n := ValueSchema{
-		MaybeString: false,
-		MaybeNumber: false,
-		MaybeBool:   true,
-		MaybeNull:   false,
-	}
-	return &n, nil
+	return NewValueSchemaBool(), nil
 }
 
 func parseFastJsonNull() (Schema, error) {
-	n := ValueSchema{
-		MaybeString: false,
-		MaybeNumber: false,
-		MaybeBool:   false,
-		MaybeNull:   true,
-	}
-	return &n, nil
+	return NewValueSchemaNull(), nil
 }

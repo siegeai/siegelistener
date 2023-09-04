@@ -75,13 +75,9 @@ func (a *ArraySchema) AsUnion() *UnionSchema {
 // that will be reflected in a bunch of non-required fields. This will allow combination
 // of different types, e.g., null or object. This will need a big rework eventually
 type UnionSchema struct {
-	O *ObjectSchema
-	A *ArraySchema
-	V *ValueSchema
-}
-
-func (u *UnionSchema) String() string {
-	return "<union>"
+	O Schema // not using *ObjectSchema because then we get nil interface values that don't match nil
+	A Schema
+	V Schema
 }
 
 func (u *UnionSchema) Kind() SchemaKind {
@@ -131,6 +127,42 @@ func (v *ValueSchema) AsUnion() *UnionSchema {
 	panic("value is not a union")
 }
 
+func NewValueSchemaString() *ValueSchema {
+	return &ValueSchema{
+		MaybeString: true,
+		MaybeNumber: false,
+		MaybeBool:   false,
+		MaybeNull:   false,
+	}
+}
+
+func NewValueSchemaNumber() *ValueSchema {
+	return &ValueSchema{
+		MaybeString: false,
+		MaybeNumber: true,
+		MaybeBool:   false,
+		MaybeNull:   false,
+	}
+}
+
+func NewValueSchemaBool() *ValueSchema {
+	return &ValueSchema{
+		MaybeString: false,
+		MaybeNumber: false,
+		MaybeBool:   true,
+		MaybeNull:   false,
+	}
+}
+
+func NewValueSchemaNull() *ValueSchema {
+	return &ValueSchema{
+		MaybeString: false,
+		MaybeNumber: false,
+		MaybeBool:   false,
+		MaybeNull:   true,
+	}
+}
+
 func Merge(a, b Schema) Schema {
 	if a == nil && b == nil {
 		return nil
@@ -158,6 +190,7 @@ func Merge(a, b Schema) Schema {
 	return mergeUnions(intoUnion(a), intoUnion(b))
 }
 
+// moop moop moop
 type moop struct {
 	af *ObjectSchemaField
 	bf *ObjectSchemaField
@@ -220,11 +253,11 @@ func mergeValues(a, b *ValueSchema) Schema {
 }
 
 func mergeUnions(a, b *UnionSchema) Schema {
-	// typecasts below make me mad
+	// should have assertions that each branch is the right kind
 	return &UnionSchema{
-		O: Merge(a.O, b.O).(*ObjectSchema),
-		A: Merge(a.A, b.A).(*ArraySchema),
-		V: Merge(a.V, b.V).(*ValueSchema),
+		O: Merge(a.O, b.O),
+		A: Merge(a.A, b.A),
+		V: Merge(a.V, b.V),
 	}
 }
 
