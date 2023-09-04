@@ -9,13 +9,10 @@ import (
 	"github.com/google/gopacket/pcap"
 	"github.com/google/gopacket/tcpassembly"
 	"github.com/google/gopacket/tcpassembly/tcpreader"
-	"github.com/valyala/fastjson"
 	"io"
 	"log"
 	"net/http"
-	"siege/jsonschema"
-	"strconv"
-	"strings"
+	"siege/apispec"
 	"time"
 )
 
@@ -211,150 +208,17 @@ func handleResponse(h *httpStream, reader *bufio.Reader) (handled bool, err erro
 func handleRequestResponse(req *request, res *response) {
 	log.Println("handling", req.inner.Method, req.inner.URL, "->", res.inner.Status)
 
-	// What exactly should the output here be?
-	// - Could construct an openapi3 object and return that.
-	// - Could construct a custom object.
-	// - Could construct a fastjson object
-	// - Could write json to a byte buffer and have another process parse / merge that.
-	//
-	// Some inferences need access to the values, which we'll lose after writing a schema guess.
-	// So need the ability to inspect values for type membership likelihood.
-	// -> We can produce a rolling average of str -> email, phone, address, etc etc
-	//
-	// What if a query param leaks private data? Seems like bad api design. No way to
-	// avoid?
-	//
-	// If the server responds with anything other than a 200, the request schema is sus.
-	// If there is a large divergence between non-200 request bodies and 200 request bodies
-	// we shouldn't try to merge them we should just trash the non-200 bodies.
-	//
-	// Question is, do we need access to the current best estimate to inform the output
-	// of this step? Not sure.
-
-	arena := &fastjson.Arena{}
-
-	spec := arena.NewObject()
-	path := arena.NewObject()
-	op := arena.NewObject()
-	resp := arena.NewObject()
-	cnt := arena.NewObject()
-	ajs := arena.NewObject()
-	scm := arena.NewObject()
-
-	// Pain point, how to detect query params vs paths?
-	spec.Set(req.inner.URL.Path, path)
-	path.Set(strings.ToLower(req.inner.Method), op)
-	op.Set("responses", resp)
-
 	if len(req.body) > 0 {
-		_, _ = jsonschema.ParseBytes(req.body)
-
-		reqVal, err := fastjson.ParseBytes(req.body)
-		if err != nil {
-			log.Println("could not parse request body because", err)
-		} else {
-			reqSchema, err := genSchema(arena, reqVal)
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			op.Set("requestBody", reqSchema)
-		}
+		sch, err := apispec.ParseSampleBodyBytes(req.body)
+		log.Printf("req err: %v\n", err)
+		log.Printf("req sch: %v\n", sch)
 	}
-
-	resp.Set(strconv.Itoa(res.inner.StatusCode), cnt)
-	cnt.Set("content", ajs)
 
 	if len(res.body) > 0 {
-		_, _ = jsonschema.ParseBytes(res.body)
-
-		resVal, err := fastjson.ParseBytes(res.body)
-		if err != nil {
-			log.Println("could not parse response body because", err)
-		} else {
-			resSchema, err := genSchema(arena, resVal)
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			ajs.Set("application/json", scm)
-			scm.Set("schema", resSchema)
-		}
+		sch, err := apispec.ParseSampleBodyBytes(res.body)
+		log.Printf("res err: %v\n", err)
+		log.Printf("res sch: %v\n", sch)
 	}
-
-	log.Println(spec)
-}
-
-func genSchema(a *fastjson.Arena, v *fastjson.Value) (*fastjson.Value, error) {
-	// how to detect recursive objects?
-	// how to get a list's type?
-	// can we under-sample list items?
-	// can we do more invasive string type checks but only for a few list items?
-
-	switch v.Type() {
-	case fastjson.TypeNull:
-		// wtf should this be?
-		// if it's a field only seen once we don't know what it is other than nullable
-		// if we see the field again in a list we may get lucky and get a type
-		obj := a.NewNull()
-		return obj, nil
-
-	case fastjson.TypeObject:
-		obj := a.NewObject()
-		objProps := a.NewObject()
-		obj.Set("type", a.NewString("object"))
-		obj.Set("properties", objProps)
-
-		vobj, err := v.Object()
-		if err != nil {
-			return nil, err
-		}
-
-		var visitErr *error = nil
-
-		vobj.Visit(func(key []byte, vv *fastjson.Value) {
-			if visitErr != nil {
-				return
-			}
-			prop, err := genSchema(a, vv)
-			if err != nil {
-				visitErr = &err
-			}
-			objProps.Set(string(key), prop)
-		})
-
-		if visitErr != nil {
-			return nil, *visitErr
-		}
-
-		return obj, nil
-	case fastjson.TypeArray:
-		// need to compute a union type of all elements in the array
-		obj := a.NewObject()
-		obj.Set("type", a.NewString("array"))
-		return obj, nil
-	case fastjson.TypeString:
-		// quick check against known "string" types
-		// e.g., numeric, email, etc
-		obj := a.NewObject()
-		obj.Set("type", a.NewString("string"))
-		return obj, nil
-	case fastjson.TypeNumber:
-		// integer or number?
-		obj := a.NewObject()
-		obj.Set("type", a.NewString("number")) // integer?
-		return obj, nil
-	case fastjson.TypeTrue:
-		obj := a.NewObject()
-		obj.Set("type", a.NewString("boolean"))
-		return obj, nil
-	case fastjson.TypeFalse:
-		obj := a.NewObject()
-		obj.Set("type", a.NewString("boolean"))
-		return obj, nil
-	}
-
-	panic("Unknown v.Type()")
 }
 
 type httpStreamFactory struct {
