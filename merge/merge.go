@@ -2,6 +2,9 @@ package merge
 
 import "github.com/getkin/kin-openapi/openapi3"
 
+// TODO this representation kind of sucks. Would be nice to have an interface based
+//   representation that could be backed by either a json doc or a dense tree.
+
 func Doc(a, b *openapi3.T) *openapi3.T {
 	if a == nil && b == nil {
 		return nil
@@ -325,14 +328,29 @@ func Response(a, b *openapi3.Response) *openapi3.Response {
 		return b
 	}
 
-	dsc := Description(*a.Description, *b.Description)
+	dsc := mergeStringPtr(a.Description, b.Description)
 	return &openapi3.Response{
 		Extensions:  Extensions(a.Extensions, b.Extensions),
-		Description: &dsc,
+		Description: dsc,
 		Headers:     Headers(a.Headers, b.Headers),
 		Content:     Content(a.Content, b.Content),
 		Links:       Links(a.Links, b.Links),
 	}
+}
+
+func mergeStringPtr(a, b *string) *string {
+	if a == nil && b == nil {
+		return nil
+	}
+	if a != nil && b == nil {
+		return a
+	}
+	if a == nil && b != nil {
+		return b
+	}
+
+	s := mergeString(*a, *b)
+	return &s
 }
 
 func Headers(a, b map[string]*openapi3.HeaderRef) map[string]*openapi3.HeaderRef {
@@ -662,7 +680,7 @@ func mergeRequired(a, b []string) []string {
 	m := 0
 	for k, v := range keep {
 		if v {
-			res[n] = k
+			res[m] = k
 			m += 1
 		}
 	}
