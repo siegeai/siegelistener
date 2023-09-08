@@ -12,7 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"siege/apispec"
+	"siege/infer"
 	"time"
 )
 
@@ -209,13 +209,13 @@ func handleRequestResponse(req *request, res *response) {
 	log.Println("handling", req.inner.Method, req.inner.URL, "->", res.inner.Status)
 
 	if len(req.body) > 0 {
-		sch, err := apispec.ParseSampleBodyBytes(req.body)
+		sch, err := infer.ParseSampleBodyBytes(req.body)
 		log.Printf("req err: %v\n", err)
 		log.Printf("req sch: %v\n", sch)
 	}
 
 	if len(res.body) > 0 {
-		sch, err := apispec.ParseSampleBodyBytes(res.body)
+		sch, err := infer.ParseSampleBodyBytes(res.body)
 		log.Printf("res err: %v\n", err)
 		log.Printf("res sch: %v\n", sch)
 	}
