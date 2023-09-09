@@ -2,7 +2,7 @@ package infer
 
 import (
 	"github.com/getkin/kin-openapi/openapi3"
-	"siege/merge"
+	"github.com/siegeai/siegelistener/merge"
 )
 
 func NewObjectSchema(props map[string]*openapi3.Schema) *openapi3.Schema {

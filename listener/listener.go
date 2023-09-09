@@ -9,11 +9,11 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/tcpassembly"
 	"github.com/google/gopacket/tcpassembly/tcpreader"
+	"github.com/siegeai/siegelistener/infer"
+	"github.com/siegeai/siegelistener/merge"
 	"io"
 	"log"
 	"net/http"
-	"siege/infer"
-	"siege/merge"
 	"strconv"
 	"time"
 )
@@ -66,6 +66,15 @@ func (l *listener) run() error {
 				log.Println(err)
 			} else {
 				log.Println(string(bs))
+				body := bytes.NewBuffer(bs)
+				resp, err := http.Post("http://localhost:3000/api/v1/spec.json", "application/json", body)
+				if err != nil {
+					log.Printf("Could not send request because %v", err)
+				} else {
+					if resp.StatusCode != http.StatusOK {
+						log.Printf("Unexpected response %v", resp)
+					}
+				}
 			}
 
 		case <-ticker:
@@ -279,6 +288,7 @@ func handleRequestResponseProcRequestBody(req *request, res *response) *openapi3
 	mt.Schema = sch.NewRef()
 
 	rb := openapi3.NewRequestBody()
+	rb.Content = openapi3.Content{}
 	rb.Content["application/json"] = mt
 
 	return &openapi3.RequestBodyRef{Value: rb}
