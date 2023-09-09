@@ -5,6 +5,7 @@ go 1.21
 require (
 	github.com/getkin/kin-openapi v0.120.0
 	github.com/google/gopacket v1.1.19
+	github.com/google/uuid v1.3.1
 	github.com/gorilla/mux v1.8.0
 	github.com/stretchr/testify v1.8.4
 	github.com/urfave/negroni v1.0.0

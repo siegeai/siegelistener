@@ -4,17 +4,20 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/tcpassembly"
 	"github.com/google/gopacket/tcpassembly/tcpreader"
+	"github.com/google/uuid"
 	"github.com/siegeai/siegelistener/infer"
 	"github.com/siegeai/siegelistener/merge"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -260,7 +263,34 @@ func handleRequestResponse(l *listener, req *request, res *response) {
 		log.Fatal("Unknown request method")
 	}
 
-	ps := openapi3.Paths{req.inner.URL.Path: &pathItem}
+	nparams := 1
+	parts := strings.Split(req.inner.URL.Path, "/")
+	resparts := make([]string, len(parts))
+	for i, p := range parts {
+		if _, err := strconv.Atoi(p); err == nil {
+			resparts[i] = fmt.Sprintf("{arg%d}", nparams)
+			a := &openapi3.ParameterRef{Value: &openapi3.Parameter{
+				Name:   fmt.Sprintf("arg%d", nparams),
+				In:     "path",
+				Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: "integer"}},
+			}}
+			op.Parameters = append(op.Parameters, a)
+			nparams += 1
+		} else if _, err := uuid.Parse(p); err == nil {
+			resparts[i] = fmt.Sprintf("{arg%d}", nparams)
+			a := &openapi3.ParameterRef{Value: &openapi3.Parameter{
+				Name:   fmt.Sprintf("arg%d", nparams),
+				In:     "path",
+				Schema: &openapi3.SchemaRef{Value: &openapi3.Schema{Type: "string", Format: "uuid"}},
+			}}
+			op.Parameters = append(op.Parameters, a)
+			nparams += 1
+		} else {
+			resparts[i] = p
+		}
+	}
+
+	ps := openapi3.Paths{strings.Join(resparts, "/"): &pathItem}
 
 	l.mergeQueue <- &openapi3.T{
 		OpenAPI: "3.0.0",
