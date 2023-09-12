@@ -53,14 +53,16 @@ type factoryWrapper struct {
 
 func (f *factoryWrapper) New(netFlow, tcpFlow gopacket.Flow, tcp *layers.TCP, ac reassembly.AssemblerContext) reassembly.Stream {
 	w := f.wrap.New()
-	s := streamWrapper{wrap: w, req: nil, res: nil}
+	s := streamWrapper{
+		wrap:         w,
+		requestQueue: make([]*http.Request, 0, 8),
+	}
 	return &s
 }
 
 type streamWrapper struct {
-	wrap HttpStream
-	req  []byte
-	res  []byte
+	wrap         HttpStream
+	requestQueue []*http.Request
 }
 
 func (s *streamWrapper) Accept(tcp *layers.TCP, ci gopacket.CaptureInfo, dir reassembly.TCPFlowDirection, nextSeq reassembly.Sequence, start *bool, ac reassembly.AssemblerContext) bool {
@@ -84,33 +86,25 @@ func (s *streamWrapper) ReassembledSG(sg reassembly.ScatterGather, ac reassembly
 
 	payload := sg.Fetch(l)
 
-	if s.req == nil {
-		s.req = payload
-	} else if s.res == nil {
-		s.res = payload
+	r, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(payload)))
+	if err == nil {
+		s.requestQueue = append(s.requestQueue, r)
+		return
 	}
 
-	if s.req != nil && s.res != nil {
-		r, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(s.req)))
-		if err != nil {
-			log.Printf("Could not parse request because %s\n%v", err, s.req)
-			s.req = nil
-			s.res = nil
-			return
-		}
-
-		w, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(s.res)), r)
-		if err != nil {
-			log.Printf("Could not parse response because %s\n%v", err, s.res)
-			s.req = nil
-			s.res = nil
-			return
-		}
-
-		s.wrap.ReassembledRequestResponse(r, w)
-		s.res = nil
-		s.req = nil
+	if len(s.requestQueue) == 0 {
+		// there is no request to pair any response with, discard
+		return
 	}
+	r = s.requestQueue[0]
+	w, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(payload)), r)
+	if err != nil {
+		log.Printf("Not a request or a response? %s\n", payload)
+		return
+	}
+	s.requestQueue = s.requestQueue[1:]
+
+	s.wrap.ReassembledRequestResponse(r, w)
 }
 
 func (s *streamWrapper) ReassemblyComplete(ac reassembly.AssemblerContext) bool {
