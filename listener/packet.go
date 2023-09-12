@@ -2,17 +2,9 @@ package main
 
 import (
 	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"log"
 )
-
-func isTcpPacket(p gopacket.Packet) bool {
-	return p != nil &&
-		p.NetworkLayer() != nil &&
-		p.TransportLayer() != nil &&
-		p.TransportLayer().LayerType() == layers.LayerTypeTCP
-}
 
 type newPacketSourceArgs struct {
 	f string // filename
