@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/pcap"
 	"log"
@@ -9,6 +10,7 @@ import (
 type newPacketSourceArgs struct {
 	f string // filename
 	i string // interface
+	p int
 }
 
 type newPacketSourceOpt func(*newPacketSourceArgs)
@@ -25,13 +27,16 @@ func withInterface(i string) newPacketSourceOpt {
 	}
 }
 
+func withPort(p int) newPacketSourceOpt {
+	return func(args *newPacketSourceArgs) {
+		args.p = p
+	}
+}
+
 func newPacketSource(opts ...newPacketSourceOpt) (*gopacket.PacketSource, error) {
-	var args newPacketSourceArgs
+	args := newPacketSourceArgs{f: "", i: "lo", p: 80}
 	for _, opt := range opts {
 		opt(&args)
-	}
-	if args.i == "" && args.f == "" {
-		args.i = "lo"
 	}
 
 	var handle *pcap.Handle
@@ -40,7 +45,7 @@ func newPacketSource(opts ...newPacketSourceOpt) (*gopacket.PacketSource, error)
 		log.Printf("Reading from pcap dump %q", args.f)
 		handle, err = pcap.OpenOffline(args.f)
 	} else {
-		log.Printf("Starting capture on interface %q", args.i)
+		log.Printf("Starting capture on interface %q and port %d", args.i, args.p)
 		handle, err = pcap.OpenLive(args.i, 4096, true, pcap.BlockForever)
 	}
 
@@ -48,7 +53,8 @@ func newPacketSource(opts ...newPacketSourceOpt) (*gopacket.PacketSource, error)
 		return nil, err
 	}
 
-	if err = handle.SetBPFFilter("tcp and port 80"); err != nil {
+	expr := fmt.Sprintf("tcp and port %d", args.p)
+	if err = handle.SetBPFFilter(expr); err != nil {
 		return nil, err
 	}
 
