@@ -313,6 +313,9 @@ func ResponseRef(a, b *openapi3.ResponseRef) *openapi3.ResponseRef {
 	if a.Ref != "" || b.Ref != "" {
 		panic("need to handle this case")
 	}
+	if a.Value == nil || b.Value == nil {
+		panic("need to handle this case")
+	}
 
 	return &openapi3.ResponseRef{Value: Response(a.Value, b.Value)}
 }
@@ -397,6 +400,9 @@ func HeaderRef(a, b *openapi3.HeaderRef) *openapi3.HeaderRef {
 		return b
 	}
 	if a.Ref != "" || b.Ref != "" {
+		panic("need to handle this case")
+	}
+	if a.Value == nil || b.Value == nil {
 		panic("need to handle this case")
 	}
 
@@ -493,6 +499,9 @@ func LinkRef(a, b *openapi3.LinkRef) *openapi3.LinkRef {
 		return b
 	}
 	if a.Ref != "" || b.Ref != "" {
+		panic("need to handle this case")
+	}
+	if a.Value == nil || b.Value == nil {
 		panic("need to handle this case")
 	}
 
@@ -595,6 +604,9 @@ func SchemaRef(a, b *openapi3.SchemaRef) *openapi3.SchemaRef {
 	if a.Ref != "" || b.Ref != "" {
 		panic("need to handle this case")
 	}
+	if a.Value == nil || b.Value == nil {
+		panic("need to handle this case")
+	}
 
 	return Schema(a.Value, b.Value).NewRef()
 }
@@ -612,9 +624,9 @@ func Schema(a, b *openapi3.Schema) *openapi3.Schema {
 
 	if a.Type == b.Type {
 		return mergeSchemaSameType(a, b)
+	} else {
+		return mergeSchemaDifferentType(a, b)
 	}
-
-	return nil
 }
 
 func mergeSchemaSameType(a, b *openapi3.Schema) *openapi3.Schema {
@@ -726,7 +738,117 @@ func Schemas(a, b openapi3.Schemas) openapi3.Schemas {
 }
 
 func mergeSchemaDifferentType(a, b *openapi3.Schema) *openapi3.Schema {
-	return nil
+	af := flattenTypes(a)
+	bf := flattenTypes(b)
+
+	oneOf := mergeFlatParams(af.oneOf, bf.oneOf)
+	anyOf := mergeFlatParams(af.anyOf, bf.anyOf)
+	allOf := mergeFlatParams(af.allOf, bf.allOf)
+	not := SchemaRef(af.not, bf.not)
+
+	return &openapi3.Schema{
+		Extensions:           nil,
+		OneOf:                oneOf,
+		AnyOf:                anyOf,
+		AllOf:                allOf,
+		Not:                  not,
+		Type:                 "",
+		Title:                mergeString(a.Title, b.Title),
+		Format:               mergeString(a.Format, b.Format),
+		Description:          mergeString(a.Description, b.Description),
+		Enum:                 nil,
+		Default:              nil,
+		Example:              nil,
+		ExternalDocs:         nil,
+		UniqueItems:          false,
+		ExclusiveMin:         false,
+		ExclusiveMax:         false,
+		Nullable:             false,
+		ReadOnly:             false,
+		WriteOnly:            false,
+		AllowEmptyValue:      false,
+		Deprecated:           false,
+		XML:                  nil,
+		Min:                  nil,
+		Max:                  nil,
+		MultipleOf:           nil,
+		MinLength:            0,
+		MaxLength:            nil,
+		Pattern:              "",
+		MinItems:             0,
+		MaxItems:             nil,
+		Items:                nil,
+		Required:             nil,
+		Properties:           nil,
+		MinProps:             0,
+		MaxProps:             nil,
+		AdditionalProperties: openapi3.AdditionalProperties{},
+		Discriminator:        nil,
+	}
+}
+
+func mergeFlatParams(a, b map[string]*openapi3.SchemaRef) []*openapi3.SchemaRef {
+	res := make([]*openapi3.SchemaRef, 0, max(len(a), len(b)))
+	keys := make(map[string]struct{}, max(len(a), len(b)))
+	for k, _ := range a {
+		keys[k] = struct{}{}
+	}
+	for k, _ := range b {
+		keys[k] = struct{}{}
+	}
+	for k, _ := range keys {
+		var ra *openapi3.SchemaRef
+		if r, in := a[k]; in {
+			ra = r
+		}
+
+		var rb *openapi3.SchemaRef
+		if r, in := b[k]; in {
+			rb = r
+		}
+
+		res = append(res, SchemaRef(ra, rb))
+	}
+
+	return res
+}
+
+type flat struct {
+	oneOf map[string]*openapi3.SchemaRef
+	anyOf map[string]*openapi3.SchemaRef
+	allOf map[string]*openapi3.SchemaRef
+	not   *openapi3.SchemaRef
+}
+
+func flattenTypes(s *openapi3.Schema) flat {
+	if s.Type != "" {
+		return flat{
+			oneOf: map[string]*openapi3.SchemaRef{s.Type: s.NewRef()},
+			anyOf: map[string]*openapi3.SchemaRef{},
+			allOf: map[string]*openapi3.SchemaRef{},
+			not:   nil,
+		}
+	} else {
+		f := flat{
+			oneOf: map[string]*openapi3.SchemaRef{s.Type: s.NewRef()},
+			anyOf: map[string]*openapi3.SchemaRef{},
+			allOf: map[string]*openapi3.SchemaRef{},
+			not:   nil,
+		}
+
+		for _, v := range s.OneOf {
+			f.oneOf[v.Value.Type] = v
+		}
+		for _, v := range s.AnyOf {
+			f.anyOf[v.Value.Type] = v
+		}
+		for _, v := range s.AllOf {
+			f.allOf[v.Value.Type] = v
+		}
+		f.not = s.Not
+
+		return f
+	}
 }
 
 func mergeString(a, b string) string {

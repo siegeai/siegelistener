@@ -46,7 +46,7 @@ func newPacketSource(opts ...newPacketSourceOpt) (*gopacket.PacketSource, error)
 		handle, err = pcap.OpenOffline(args.f)
 	} else {
 		log.Printf("Starting capture on interface %q and port %d", args.i, args.p)
-		handle, err = pcap.OpenLive(args.i, 4096, true, pcap.BlockForever)
+		handle, err = pcap.OpenLive(args.i, 65535, true, pcap.BlockForever)
 	}
 
 	if err != nil {

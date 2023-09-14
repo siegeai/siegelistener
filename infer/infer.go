@@ -26,9 +26,15 @@ func NewArraySchema(elems []*openapi3.Schema) *openapi3.Schema {
 	for _, e := range elems {
 		item = merge.Schema(item, e)
 	}
+
+	var items *openapi3.SchemaRef
+	if item != nil {
+		items = item.NewRef()
+	}
+
 	return &openapi3.Schema{
 		Type:  openapi3.TypeArray,
-		Items: item.NewRef(),
+		Items: items,
 	}
 }
 

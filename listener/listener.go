@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"compress/gzip"
+	"compress/zlib"
 	"encoding/json"
 	"fmt"
 	"github.com/getkin/kin-openapi/openapi3"
@@ -43,33 +46,68 @@ type stream struct {
 	l *listener
 }
 
-func (s *stream) ReassembledRequestResponse(req *http.Request, res *http.Response) {
+func (s *stream) ReassembledRequestResponse(req []byte, res []byte) {
 
-	r, err := io.ReadAll(req.Body)
+	r, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(req)))
 	if err != nil {
-		log.Printf("Could not read request body because %s", err)
+		log.Printf("Could not parse request because %s\n%s\n", err, string(req))
 		return
 	}
-	defer func() {
-		if err := req.Body.Close(); err != nil {
-			log.Printf("Could not close requset body because %s", err)
-		}
-	}()
 
-	w, err := io.ReadAll(res.Body)
+	w, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(res)), r)
 	if err != nil {
-		log.Printf("Could not read response body because %s", err)
+		log.Printf("Could not parse response because %s\n%s\n", err, string(res))
 		return
 	}
-	defer func() {
-		if err := res.Body.Close(); err != nil {
-			log.Printf("Could not close response body because %s", err)
-		}
-	}()
 
-	u := request{inner: req, body: r}
-	v := response{inner: res, body: w}
+	log.Printf("handling %s %s -> %s\n", r.Method, r.URL.Path, w.Status)
+	rb, rbErr := decompressAndReadAll(r.Header.Get("Content-Encoding"), r.Body)
+	wb, wbErr := decompressAndReadAll(w.Header.Get("Content-Encoding"), w.Body)
+	if rbErr != nil || wbErr != nil {
+		log.Printf("err read request body: %s\n", rbErr)
+		log.Printf("%s\n", string(req))
+		log.Printf("err read response body: %s\n", wbErr)
+		log.Printf("%s\n", string(res))
+	}
+
+	u := request{inner: r, body: rb}
+	v := response{inner: w, body: wb}
 	handleRequestResponse(s.l, &u, &v)
+}
+
+func decompress(enc string, r io.ReadCloser) (io.ReadCloser, error) {
+	if enc == "" {
+		return r, nil
+	} else if enc == "gzip" {
+		return gzip.NewReader(r)
+	} else if enc == "deflate" {
+		return zlib.NewReader(r)
+	} else if enc == "compress" {
+		return nil, fmt.Errorf("unsupported compression format 'compress'")
+	} else if enc == "br" {
+		return nil, fmt.Errorf("unsupported compression format 'br'")
+	}
+	return r, nil
+}
+
+func decompressAndReadAll(enc string, r io.ReadCloser) ([]byte, error) {
+	d, err := decompress(enc, r)
+	if err == io.EOF {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+
+	bs, err := io.ReadAll(d)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := d.Close(); err != nil {
+		log.Printf("Could not close reader because %s", err)
+	}
+
+	return bs, nil
 }
 
 func (l *listener) run() error {
@@ -94,7 +132,7 @@ func (l *listener) run() error {
 			if err != nil {
 				log.Println(err)
 			} else {
-				log.Println(string(bs))
+				log.Printf("updated doc %s", string(bs))
 				body := bytes.NewBuffer(bs)
 				resp, err := http.Post("http://localhost:3000/api/v1/spec.json", "application/json", body)
 				if err != nil {
