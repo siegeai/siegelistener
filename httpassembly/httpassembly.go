@@ -3,11 +3,14 @@ package httpassembly
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/reassembly"
 	"log"
+	"log/slog"
 	"net/http"
+	"sync"
 )
 
 type HttpAssembler struct {
@@ -44,6 +47,8 @@ func (a *HttpAssembler) Assemble(p gopacket.Packet) {
 
 type HttpStreamFactory interface {
 	New() HttpStream
+	Context() context.Context
+	WaitGroup() *sync.WaitGroup
 }
 
 type HttpStream interface {
@@ -58,8 +63,6 @@ type factoryWrapper struct {
 func (f *factoryWrapper) New(netFlow, tcpFlow gopacket.Flow, tcp *layers.TCP, ac reassembly.AssemblerContext) reassembly.Stream {
 	w := f.wrap.New()
 
-	//log.Printf("new stream for %s %s", netFlow, tcpFlow)
-
 	fsmOptions := reassembly.TCPSimpleFSMOptions{SupportMissingEstablishment: false}
 	s := streamWrapper{
 		sid:  f.counter,
@@ -73,7 +76,8 @@ func (f *factoryWrapper) New(netFlow, tcpFlow gopacket.Flow, tcp *layers.TCP, ac
 		messageQueue: make(chan message),
 	}
 	f.counter += 1
-	go s.loop()
+	f.wrap.WaitGroup().Add(1)
+	go s.loop(f.wrap.Context(), f.wrap.WaitGroup())
 	return &s
 }
 
@@ -110,17 +114,18 @@ func newSide() *side {
 
 func (s *streamWrapper) Accept(tcp *layers.TCP, ci gopacket.CaptureInfo, dir reassembly.TCPFlowDirection, nextSeq reassembly.Sequence, start *bool, ac reassembly.AssemblerContext) bool {
 	if !s.fsm.CheckState(tcp, dir) {
-		log.Printf("rejecting because of fsm")
+		slog.Debug("rejecting because of fsm")
 		return false
 	}
 
 	if err := s.opt.Accept(tcp, ci, dir, nextSeq, start); err != nil {
-		log.Printf("rejecting because of opts")
+		slog.Debug("rejecting because of opts")
 		return false
 	}
 
 	//log.Printf("packet: %s\n", string(tcp.Payload))
 	//log.Println("accepting")
+	slog.Debug("stream accept", "stream", s.sid, "tcp", tcp.TransportFlow(), "dir", dir)
 	return true
 }
 
@@ -132,12 +137,12 @@ func (s *streamWrapper) ReassembledSG(sg reassembly.ScatterGather, ac reassembly
 	}
 
 	dir, start, stop, skip := sg.Info()
-	payload := sg.Fetch(l)
-
+	slog.Debug("stream reassembled", "stream", s.sid, "len", l)
 	if skip > 0 {
-		log.Printf("Dropped %d bytes", skip)
+		slog.Warn("dropped bytes", "skip", skip)
 	}
 
+	payload := sg.Fetch(l)
 	msg := message{
 		dir:     dir,
 		start:   start,
@@ -150,19 +155,20 @@ func (s *streamWrapper) ReassembledSG(sg reassembly.ScatterGather, ac reassembly
 }
 
 func (s *streamWrapper) ReassemblyComplete(ac reassembly.AssemblerContext) bool {
-	log.Println("reassembly complete")
+	slog.Debug("stream reassembly complete", "stream", s.sid)
 	//close(s.messageQueue)
 	return false
 }
 
-func (s *streamWrapper) loop() {
-	//for msg := range s.messageQueue {
-	//	s.reassembledMessage(msg)
-	//}
+func (s *streamWrapper) loop(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+	slog.Info("stream starting", "stream", s.sid)
+	defer slog.Info("stream done", "stream", s.sid)
 
-	// TODO shutdown somehow. Should pass in a sync.WaitGroup
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case msg := <-s.messageQueue:
 			s.reassembledMessage(msg)
 		}
@@ -170,8 +176,6 @@ func (s *streamWrapper) loop() {
 }
 
 func (s *streamWrapper) reassembledMessage(msg message) {
-	//log.Printf("reassembly state: id %d tql %d, tcl %d, fql %d fcl %d\n", s.sid, len(s.sides[true].requestQueue), len(s.sides[true].chunks), len(s.sides[false].requestQueue), len(s.sides[false].chunks))
-
 	if isRequest(msg.payload) {
 		s.reassembledRequest(msg)
 		return
@@ -185,7 +189,7 @@ func (s *streamWrapper) reassembledMessage(msg message) {
 		return
 	}
 
-	log.Printf("Unknown message with payload of len %d: %s...", len(msg.payload), string(msg.payload)[0:min(len(msg.payload), 32)])
+	slog.Warn("uninterpretable message", "stream", s.sid, "len", len(msg.payload), "head", string(msg.payload[0:min(len(msg.payload), 32)]))
 }
 
 func (s *streamWrapper) reassembledRequest(msg message) {

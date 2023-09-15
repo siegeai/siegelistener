@@ -1,126 +1,56 @@
-package main
+package listener
 
 import (
 	"bufio"
 	"bytes"
-	"compress/gzip"
-	"compress/zlib"
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/getkin/kin-openapi/openapi3"
-	"github.com/google/gopacket"
 	"github.com/google/uuid"
 	"github.com/siegeai/siegelistener/httpassembly"
 	"github.com/siegeai/siegelistener/infer"
 	"github.com/siegeai/siegelistener/merge"
-	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-type listener struct {
-	source     *gopacket.PacketSource
+type Listener struct {
+	source     PacketSource
 	doc        *openapi3.T
 	mergeQueue chan *openapi3.T
 }
 
-func newListener(source *gopacket.PacketSource) listener {
-	return listener{
+func NewListener(source PacketSource) *Listener {
+	return &Listener{
 		source:     source,
 		mergeQueue: make(chan *openapi3.T, 10),
 	}
 }
 
-type factory struct {
-	l *listener
-}
+func (l *Listener) Listen(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+	slog.Info("listener starting")
+	defer slog.Info("listener done")
 
-func (f *factory) New() httpassembly.HttpStream {
-	return &stream{l: f.l}
-}
+	childWg := &sync.WaitGroup{}
+	defer childWg.Wait()
 
-type stream struct {
-	l *listener
-}
-
-func (s *stream) ReassembledRequestResponse(req []byte, res []byte) {
-
-	r, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(req)))
-	if err != nil {
-		log.Printf("Could not parse request because %s\n%s\n", err, string(req))
-		return
-	}
-
-	w, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(res)), r)
-	if err != nil {
-		log.Printf("Could not parse response because %s\n%s\n", err, string(res))
-		return
-	}
-
-	log.Printf("handling %s %s -> %s\n", r.Method, r.URL.Path, w.Status)
-	rb, rbErr := decompressAndReadAll(r.Header.Get("Content-Encoding"), r.Body)
-	wb, wbErr := decompressAndReadAll(w.Header.Get("Content-Encoding"), w.Body)
-	if rbErr != nil || wbErr != nil {
-		log.Printf("err read request body: %s\n", rbErr)
-		log.Printf("%s\n", string(req))
-		log.Printf("err read response body: %s\n", wbErr)
-		log.Printf("%s\n", string(res))
-	}
-
-	u := request{inner: r, body: rb}
-	v := response{inner: w, body: wb}
-	handleRequestResponse(s.l, &u, &v)
-}
-
-func decompress(enc string, r io.ReadCloser) (io.ReadCloser, error) {
-	if enc == "" {
-		return r, nil
-	} else if enc == "gzip" {
-		return gzip.NewReader(r)
-	} else if enc == "deflate" {
-		return zlib.NewReader(r)
-	} else if enc == "compress" {
-		return nil, fmt.Errorf("unsupported compression format 'compress'")
-	} else if enc == "br" {
-		return nil, fmt.Errorf("unsupported compression format 'br'")
-	}
-	return r, nil
-}
-
-func decompressAndReadAll(enc string, r io.ReadCloser) ([]byte, error) {
-	d, err := decompress(enc, r)
-	if err == io.EOF {
-		return nil, nil
-	} else if err != nil {
-		return nil, err
-	}
-
-	bs, err := io.ReadAll(d)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := d.Close(); err != nil {
-		log.Printf("Could not close reader because %s", err)
-	}
-
-	return bs, nil
-}
-
-func (l *listener) run() error {
-
-	f := &factory{l: l}
+	f := &factory{l: l, ctx: ctx, wg: childWg}
 	assembler := httpassembly.NewAssembler(f)
-
-	packets := l.source.Packets()
 	ticker := time.Tick(time.Minute)
 
 	for {
 		select {
-		case packet := <-packets:
+		case <-ctx.Done():
+			return
+
+		case packet := <-l.source.Packets():
 			assembler.Assemble(packet)
 
 		case <-ticker:
@@ -130,21 +60,79 @@ func (l *listener) run() error {
 			l.doc = merge.Doc(l.doc, doc)
 			bs, err := json.Marshal(l.doc)
 			if err != nil {
-				log.Println(err)
+				slog.Error("could not write doc json", "err", err)
+				continue
+			}
+
+			slog.Info("updated doc", "doc", string(bs))
+			body := bytes.NewBuffer(bs)
+			resp, err := http.Post("http://localhost:3000/api/v1/spec.json", "application/json", body)
+			if err != nil {
+				slog.Warn("could not send doc to server", "err", err)
 			} else {
-				log.Printf("updated doc %s", string(bs))
-				body := bytes.NewBuffer(bs)
-				resp, err := http.Post("http://localhost:3000/api/v1/spec.json", "application/json", body)
-				if err != nil {
-					log.Printf("Could not send request because %v", err)
-				} else {
-					if resp.StatusCode != http.StatusOK {
-						log.Printf("Unexpected response %v", resp)
-					}
+				if resp.StatusCode != http.StatusOK {
+					slog.Warn("error status sending doc to server", "status", resp.Status)
 				}
 			}
 		}
 	}
+}
+
+type factory struct {
+	l   *Listener
+	ctx context.Context
+	wg  *sync.WaitGroup
+}
+
+func (f *factory) New() httpassembly.HttpStream {
+	return &stream{l: f.l}
+}
+
+func (f *factory) Context() context.Context {
+	return f.ctx
+}
+
+func (f *factory) WaitGroup() *sync.WaitGroup {
+	return f.wg
+}
+
+type stream struct {
+	l *Listener
+}
+
+func (s *stream) ReassembledRequestResponse(req []byte, res []byte) {
+
+	r, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(req)))
+	if err != nil {
+		slog.Error("could not read request", "err", err, "len", len(req), "head", string(req[:min(len(req), 32)]))
+		return
+	}
+
+	w, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(res)), r)
+	if err != nil {
+		slog.Error("could not read response", "err", err, "len", len(res), "head", string(res[:min(len(res), 32)]))
+		return
+	}
+
+	slog.Info("handling", "method", r.Method, "path", r.URL.Path, "status", w.Status)
+	// TODO want to handle request / response pairs where we've thrown away the body because its
+	//  something other than an api call (e.g. html or a file).
+
+	rb, err := readAllEncoded(r.Header.Get("Content-Encoding"), r.Body)
+	if err != nil {
+		slog.Error("could not read request body", "err", err, "len", len(req), "head", string(req[:min(len(req), 32)]))
+		return
+	}
+
+	wb, err := readAllEncoded(w.Header.Get("Content-Encoding"), w.Body)
+	if err != nil {
+		slog.Error("could not read response body", "err", err, "len", len(res), "head", string(res[:min(len(res), 32)]))
+		return
+	}
+
+	u := request{inner: r, body: rb}
+	v := response{inner: w, body: wb}
+	handleRequestResponse(s.l, &u, &v)
 }
 
 // TODO stupid name, parsedRequest?
@@ -159,8 +147,7 @@ type response struct {
 	body  []byte
 }
 
-func handleRequestResponse(l *listener, req *request, res *response) {
-	log.Println("handling", req.inner.Method, req.inner.URL, "->", res.inner.Status)
+func handleRequestResponse(l *Listener, req *request, res *response) {
 	if 500 <= res.inner.StatusCode && res.inner.StatusCode < 600 {
 		return
 	}
