@@ -176,7 +176,7 @@ func (s *streamWrapper) loop(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 func (s *streamWrapper) reassembledMessage(msg message) {
-	if isRequest(msg.payload) {
+	if isRequest(msg) {
 		s.reassembledRequest(msg)
 		return
 	}
@@ -341,12 +341,15 @@ func (s *streamWrapper) chunksDone(msg *message) {
 	}
 }
 
-func isRequest(bs []byte) bool {
-	switch string(prefix(bs)) {
+func isRequest(msg message) bool {
+	switch string(prefix(msg.payload)) {
 	case "GET", "HEAD", "POST", "PUT", "DELETE", "TRACE", "CONNECT":
 		return true
 	}
-	return false
+	if msg.dir == true {
+		return false
+	}
+	return true
 }
 
 func isResponse(bs []byte) bool {
