@@ -346,10 +346,7 @@ func isRequest(msg message) bool {
 	case "GET", "HEAD", "POST", "PUT", "DELETE", "TRACE", "CONNECT":
 		return true
 	}
-	if msg.dir == true {
-		return false
-	}
-	return true
+	return false
 }
 
 func isResponse(bs []byte) bool {
