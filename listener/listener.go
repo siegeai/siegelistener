@@ -64,7 +64,7 @@ func (l *Listener) Listen(ctx context.Context, wg *sync.WaitGroup) {
 				continue
 			}
 
-			slog.Info("updated doc", "doc", string(bs))
+			slog.Debug("updated doc", "len", len(bs))
 			body := bytes.NewBuffer(bs)
 			resp, err := http.Post("http://localhost:3000/api/v1/spec.json", "application/json", body)
 			if err != nil {
@@ -111,6 +111,13 @@ func (s *stream) ReassembledRequestResponse(req []byte, res []byte) {
 	w, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(res)), r)
 	if err != nil {
 		slog.Error("could not read response", "err", err, "len", len(res), "head", string(res[:min(len(res), 32)]))
+		return
+	}
+
+	// TODO what do we actually want here?
+	if !strings.Contains(r.Header.Get("Content-Type"), "json") &&
+		!strings.Contains(w.Header.Get("Content-Type"), "json") {
+		slog.Info("skipping", "method", r.Method, "path", r.URL.Path, "status", w.Status, "reason", "not application/json", "r", r.Header.Get("Content-Type"), "w", w.Header.Get("Content-Type"))
 		return
 	}
 
@@ -235,6 +242,7 @@ func handleRequestResponseProcRequestBody(req *request, res *response) *openapi3
 
 	sch, err := infer.ParseSampleBodyBytes(req.body)
 	if err != nil {
+		slog.Warn("error parsing request body as json", "err", err)
 		// could not parse json?
 		return nil
 	}
@@ -261,7 +269,7 @@ func handleRequestResponseProcResponses(req *request, res *response) openapi3.Re
 
 	sch, err := infer.ParseSampleBodyBytes(res.body)
 	if err != nil {
-		// could not parse json?
+		slog.Warn("error parsing response body as json", "err", err)
 		return nil
 	}
 

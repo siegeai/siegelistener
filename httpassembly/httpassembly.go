@@ -4,10 +4,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/reassembly"
-	"log"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -99,32 +100,18 @@ type streamWrapper struct {
 }
 
 type side struct {
-	requestQueue     [][]byte
-	chunks           [][]byte
-	chunksAreRequest bool
+	buffer       []byte
+	requestQueue [][]byte
 }
 
 func newSide() *side {
 	return &side{
-		requestQueue:     make([][]byte, 0, 8),
-		chunks:           nil,
-		chunksAreRequest: false,
+		buffer:       nil,
+		requestQueue: make([][]byte, 0, 8),
 	}
 }
 
 func (s *streamWrapper) Accept(tcp *layers.TCP, ci gopacket.CaptureInfo, dir reassembly.TCPFlowDirection, nextSeq reassembly.Sequence, start *bool, ac reassembly.AssemblerContext) bool {
-	if !s.fsm.CheckState(tcp, dir) {
-		slog.Debug("rejecting because of fsm")
-		return false
-	}
-
-	if err := s.opt.Accept(tcp, ci, dir, nextSeq, start); err != nil {
-		slog.Debug("rejecting because of opts")
-		return false
-	}
-
-	//log.Printf("packet: %s\n", string(tcp.Payload))
-	//log.Println("accepting")
 	slog.Debug("stream accept", "stream", s.sid, "tcp", tcp.TransportFlow(), "dir", dir)
 	return true
 }
@@ -176,214 +163,66 @@ func (s *streamWrapper) loop(ctx context.Context, wg *sync.WaitGroup) {
 }
 
 func (s *streamWrapper) reassembledMessage(msg message) {
-	if isRequest(msg) {
-		s.reassembledRequest(msg)
-		return
-	}
-	if isResponse(msg.payload) {
-		s.reassembledResponse(msg)
-		return
-	}
-	if isChunk(msg.payload) {
-		s.reassembledChunk(msg)
-		return
+	lhs := s.sides[msg.dir]
+	rhs := s.sides[!msg.dir]
+
+	if len(lhs.buffer) >= 0 {
+		lhs.buffer = append(lhs.buffer, msg.payload...)
+	} else {
+		// no idea what the cap will be on this
+		lhs.buffer = msg.payload
 	}
 
-	slog.Warn("uninterpretable message", "stream", s.sid, "len", len(msg.payload), "head", string(msg.payload[0:min(len(msg.payload), 32)]))
-}
+	// try request
+	req, reqErr := http.ReadRequest(bufio.NewReader(bytes.NewReader(lhs.buffer)))
+	if reqErr == nil {
+		// affirmative on the request path
+		_, bodyErr := io.ReadAll(req.Body)
+		defer req.Body.Close()
 
-func (s *streamWrapper) reassembledRequest(msg message) {
-	v := s.sides[msg.dir]
-
-	if len(v.chunks) > 0 {
-		log.Printf("Expected a chunk but got a request")
-		s.chunksDone(&msg)
-		//return
-	}
-
-	r, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(msg.payload)))
-	if err != nil {
-		log.Printf("httpassembly Could not parse request because %s\n%s\n", err, string(msg.payload))
-		return
-	}
-
-	chunked := false
-	for _, enc := range r.TransferEncoding {
-		if "chunked" == enc {
-			chunked = true
+		if errors.Is(bodyErr, io.ErrUnexpectedEOF) {
+			// still need more out of the stream
+			slog.Debug("waiting for more request data", "have", len(lhs.buffer))
+			return
 		}
+
+		lhs.requestQueue = append(lhs.requestQueue, lhs.buffer)
+		lhs.buffer = make([]byte, 0, 512)
+		return
 	}
 
-	if chunked {
-		if bytes.HasSuffix(msg.payload, []byte("0\r\n\r\n")) {
-			// we have all the data so treat it as not chunked
-			chunked = false
+	var rhsReq *http.Request
+	if len(rhs.requestQueue) > 0 {
+		r, rhsReqErr := http.ReadRequest(bufio.NewReader(bytes.NewReader(rhs.requestQueue[0])))
+		if rhsReqErr != nil {
+			panic("shouldn't fail because we already checked its a request")
+		}
+		rhsReq = r
+	}
+
+	// try response
+	res, resErr := http.ReadResponse(bufio.NewReader(bytes.NewReader(lhs.buffer)), rhsReq)
+	if resErr == nil {
+		// affirmative on response path
+		_, bodyErr := io.ReadAll(res.Body)
+		defer res.Body.Close()
+
+		if errors.Is(bodyErr, io.ErrUnexpectedEOF) {
+			// still need more out of the stream
+			slog.Debug("waiting for more response data", "have", len(lhs.buffer))
+			return
+		}
+
+		if rhsReq != nil {
+			slog.Debug("handled rr")
+			s.wrap.ReassembledRequestResponse(rhs.requestQueue[0], lhs.buffer)
+			lhs.buffer = nil
+			rhs.requestQueue = rhs.requestQueue[1:]
 		} else {
-			log.Printf("Chunked request, no end in sight")
+			slog.Debug("dropped rr")
+			lhs.buffer = nil
 		}
-	}
 
-	if chunked {
-		v.chunksAreRequest = true
-		v.chunks = make([][]byte, 0, 8)
-		v.chunks = append(v.chunks, msg.payload)
-
-	} else {
-		v.requestQueue = append(v.requestQueue, msg.payload)
-	}
-}
-
-func (s *streamWrapper) reassembledResponse(msg message) {
-	v := s.sides[msg.dir]
-
-	if len(v.chunks) > 0 {
-		log.Printf("Expected a chunk but got a response")
-		s.chunksDone(&msg)
-		//return
-	}
-
-	o := s.sides[!msg.dir]
-	var r *http.Request
-	if len(o.requestQueue) > 0 {
-		var err error
-		r, err = http.ReadRequest(bufio.NewReader(bytes.NewReader(o.requestQueue[0])))
-		if err != nil {
-			log.Printf("Could not parse request, WTF?")
-		}
-	}
-
-	w, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(msg.payload)), r)
-	if err != nil {
-		log.Printf("Could not parse response because %s", err)
 		return
 	}
-
-	chunked := false
-	for _, enc := range w.TransferEncoding {
-		if "chunked" == enc {
-			chunked = true
-		}
-	}
-
-	if chunked {
-		if bytes.HasSuffix(msg.payload, []byte("0\r\n\r\n")) {
-			// we have all the data so treat it as not chunked
-			chunked = false
-		} else {
-			log.Printf("Chunked response, no end in sight")
-		}
-	}
-
-	if chunked {
-		v.chunksAreRequest = false
-		v.chunks = make([][]byte, 0, 8)
-		v.chunks = append(v.chunks, msg.payload)
-
-	} else {
-		if r == nil {
-			// discard because we have no request to pair with
-			return
-		}
-
-		s.wrap.ReassembledRequestResponse(o.requestQueue[0], msg.payload)
-		o.requestQueue = o.requestQueue[1:]
-	}
-}
-
-func (s *streamWrapper) reassembledChunk(msg message) {
-	v := s.sides[msg.dir]
-
-	if len(v.chunks) == 0 {
-		log.Printf("Expected to follow a chunked message")
-		return
-	}
-
-	v.chunks = append(v.chunks, msg.payload)
-
-	// If it's not the last chunk we are done for now
-	if !bytes.HasSuffix(msg.payload, []byte("0\r\n\r\n")) {
-		return
-	}
-
-	s.chunksDone(&msg)
-}
-
-func (s *streamWrapper) chunksDone(msg *message) {
-
-	v := s.sides[msg.dir]
-
-	full := bytes.Join(v.chunks, []byte{})
-	v.chunks = nil
-
-	if v.chunksAreRequest {
-		_, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(full)))
-		if err != nil {
-			log.Printf("Could not parse (chunked) request because %s", err)
-			return
-		}
-		v.requestQueue = append(v.requestQueue, full)
-
-	} else {
-		_, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(full)), nil)
-		if err != nil {
-			log.Printf("Could not parse (chunked) response because %s", err)
-			return
-		}
-
-		o := s.sides[!msg.dir]
-		if len(o.requestQueue) == 0 {
-			// discard because we have no request to pair with
-			return
-		}
-
-		s.wrap.ReassembledRequestResponse(o.requestQueue[0], full)
-		o.requestQueue = o.requestQueue[1:]
-	}
-}
-
-func isRequest(msg message) bool {
-	switch string(prefix(msg.payload)) {
-	case "GET", "HEAD", "POST", "PUT", "DELETE", "TRACE", "CONNECT":
-		return true
-	}
-	return false
-}
-
-func isResponse(bs []byte) bool {
-	if bytes.HasPrefix(bs, []byte("HTTP/")) {
-		return true
-	}
-	return false
-}
-
-func isChunk(bs []byte) bool {
-	// Chunks start with a hex number denoting their length
-	return isHex(prefix(bs))
-}
-
-func prefix(bs []byte) []byte {
-	for i, b := range bs {
-		// SP CR LF HTAB
-		if b == 0x20 || b == 0x0D || b == 0x0A || b == 0x09 {
-			return bs[0:i]
-		}
-	}
-	return bs
-}
-
-func isHex(bs []byte) bool {
-	if len(bs) == 0 {
-		return false
-	}
-
-	for _, b := range bs {
-		// 0-9 -> 48-57
-		// A-F -> 65-70
-		// a-f -> 97-102
-		if !((48 <= b && b <= 57) || (65 <= b && b <= 70) || (97 <= b && b <= 102)) {
-			return false
-		}
-	}
-
-	return true
 }
