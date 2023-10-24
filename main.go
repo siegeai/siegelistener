@@ -43,8 +43,9 @@ func main() {
 	defer cancel()
 
 	l := listener.NewListener(s)
-	wg.Add(1)
-	go l.Listen(ctx, wg)
+	wg.Add(2)
+	go l.ListenJob(ctx, wg)
+	go l.PublishJob(ctx, wg)
 
 	<-term
 }

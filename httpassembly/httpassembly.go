@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 )
 
 type HttpAssembler struct {
@@ -44,6 +45,10 @@ func (a *HttpAssembler) Assemble(p gopacket.Packet) {
 
 	c := assemblyContext{CaptureInfo: p.Metadata().CaptureInfo}
 	a.assembler.AssembleWithContext(p.NetworkLayer().NetworkFlow(), tcp.(*layers.TCP), &c)
+}
+
+func (a *HttpAssembler) FlushOlderThan(t time.Time) {
+	a.assembler.FlushCloseOlderThan(t)
 }
 
 type HttpStreamFactory interface {

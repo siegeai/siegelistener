@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/common/expfmt"
 	"github.com/siegeai/siegelistener/httpassembly"
 	"github.com/siegeai/siegelistener/infer"
-	"github.com/siegeai/siegelistener/merge"
-	"log"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -21,29 +21,201 @@ import (
 )
 
 type Listener struct {
-	source     PacketSource
-	doc        *openapi3.T
-	mergeQueue chan *openapi3.T
+	source          PacketSource
+	publishDuration time.Duration
+	publishTime     time.Time
+	requestLogs     chan *RequestLog
+	schemaMetrics   map[Schema]*SchemaMetrics
+	endpointMetrics map[Endpoint]*EndpointMetrics
+	registry        *prometheus.Registry
+}
+
+type Endpoint struct {
+	Path   string
+	Method string
+}
+
+type EndpointMetrics struct {
+	Endpoint        Endpoint
+	RequestDuration prometheus.Histogram
+	RequestCount    prometheus.Counter
+	ErrorCount      prometheus.Counter
+}
+
+type Schema string
+
+type SchemaMetrics struct {
+	UpdateTime  time.Time
+	UpdateCount int
+}
+
+func NewEndpointMetrics(e Endpoint) *EndpointMetrics {
+	namespace := "siege"
+	subsystem := "listener"
+	labels := prometheus.Labels{"path": e.Path, "method": e.Method}
+
+	requestDuration := prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:        "request_duration",
+		Namespace:   namespace,
+		Subsystem:   subsystem,
+		ConstLabels: labels,
+	})
+
+	requestCount := prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "request_count",
+		Namespace:   namespace,
+		Subsystem:   subsystem,
+		ConstLabels: labels,
+	})
+
+	errorCount := prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        "error_count",
+		Namespace:   namespace,
+		Subsystem:   subsystem,
+		ConstLabels: labels,
+	})
+
+	return &EndpointMetrics{
+		Endpoint:        e,
+		RequestDuration: requestDuration,
+		RequestCount:    requestCount,
+		ErrorCount:      errorCount,
+	}
+}
+
+func (m *EndpointMetrics) Register(reg prometheus.Registerer) {
+	reg.MustRegister(
+		m.RequestCount,
+		m.ErrorCount,
+		m.RequestDuration,
+	)
+}
+
+func (m *EndpointMetrics) HandleRequestLog(r *RequestLog) {
+	if m.Endpoint != r.Endpoint {
+		log := getLogger()
+		log.Error("hit the wrong metrics", "lhs", m.Endpoint, "rhs", r.Endpoint)
+		return
+	}
+
+	m.RequestCount.Inc()
+
+	if 500 <= r.Code && r.Code <= 599 {
+		m.ErrorCount.Inc()
+	}
+
+	m.RequestDuration.Observe(r.Duration.Seconds())
+}
+
+func (l *Listener) getOrCreateEndpointMetrics(e Endpoint) *EndpointMetrics {
+	if m, ok := l.endpointMetrics[e]; ok {
+		return m
+	}
+	m := NewEndpointMetrics(e)
+	m.Register(l.registry)
+	l.endpointMetrics[e] = m
+	return m
+}
+
+func (l *Listener) getOrCreateSchemaMetrics(s Schema) *SchemaMetrics {
+	if m, ok := l.schemaMetrics[s]; ok {
+		return m
+	}
+	m := &SchemaMetrics{UpdateTime: time.Time{}, UpdateCount: 0}
+	l.schemaMetrics[s] = m
+	return m
+}
+
+func (l *Listener) handleRequestLog(r *RequestLog) {
+	sm := l.getOrCreateSchemaMetrics(r.Schema)
+	sm.UpdateTime = time.Now()
+	sm.UpdateCount += 1
+
+	em := l.getOrCreateEndpointMetrics(r.Endpoint)
+	em.HandleRequestLog(r)
+}
+
+func (l *Listener) publish() {
+	log := getLogger()
+	log.Debug("publish")
+	defer log.Debug("publish done")
+
+	schemas := make([]Schema, 0, 10)
+	for s, sm := range l.schemaMetrics {
+		if l.publishTime.Before(sm.UpdateTime) {
+			schemas = append(schemas, s)
+		}
+	}
+
+	metrics, err := l.registry.Gather()
+	if err != nil {
+		panic(err)
+	}
+
+	buf := &bytes.Buffer{}
+	enc := expfmt.NewEncoder(buf, expfmt.FmtText)
+	for _, mf := range metrics {
+		if err := enc.Encode(mf); err != nil {
+			log.Error("could not encode metric family")
+		}
+	}
+
+	req := make(map[string]any)
+	req["listenerID"] = "424242"
+	req["schemas"] = schemas
+	req["metrics"] = buf.String()
+
+	bs, err := json.Marshal(req)
+	if err != nil {
+		panic(err)
+	}
+
+	log.Debug("publishing metrics", "payload", string(bs))
+
+	resp, err := http.Post(
+		"http://localhost:3000/api/v1/listener/update",
+		"application/json",
+		bytes.NewReader(bs),
+	)
+
+	if err != nil {
+		log.Warn("could not send doc to server", "err", err)
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		log.Warn("error status sending doc to server", "status", resp.Status)
+		return
+	}
+
+	l.publishTime = time.Now()
+}
+
+type RequestLog struct {
+	Endpoint Endpoint
+	Code     int
+	Duration time.Duration
+	Schema   Schema
 }
 
 func NewListener(source PacketSource) *Listener {
 	return &Listener{
-		source:     source,
-		mergeQueue: make(chan *openapi3.T, 10),
+		source:          source,
+		publishDuration: 5 * time.Second,
+		publishTime:     time.Time{},
+		requestLogs:     make(chan *RequestLog),
+		schemaMetrics:   make(map[Schema]*SchemaMetrics),
+		endpointMetrics: make(map[Endpoint]*EndpointMetrics),
+		registry:        prometheus.NewRegistry(),
 	}
 }
 
-func (l *Listener) Listen(ctx context.Context, wg *sync.WaitGroup) {
+func (l *Listener) ListenJob(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
-	slog.Info("listener starting")
-	defer slog.Info("listener done")
 
-	childWg := &sync.WaitGroup{}
-	defer childWg.Wait()
-
-	f := &factory{l: l, ctx: ctx, wg: childWg}
+	f := &factory{l: l, ctx: ctx, wg: wg}
 	assembler := httpassembly.NewAssembler(f)
-	ticker := time.Tick(time.Minute)
+	flushTicker := time.Tick(time.Minute)
 
 	for {
 		select {
@@ -53,27 +225,26 @@ func (l *Listener) Listen(ctx context.Context, wg *sync.WaitGroup) {
 		case packet := <-l.source.Packets():
 			assembler.Assemble(packet)
 
-		case <-ticker:
-			//assembler.FlushCloseOlderThan(time.Now().Add(time.Minute * -2))
+		case <-flushTicker:
+			assembler.FlushOlderThan(time.Now().Add(time.Minute * -2))
+		}
+	}
+}
 
-		case doc := <-l.mergeQueue:
-			l.doc = merge.Doc(l.doc, doc)
-			bs, err := json.Marshal(l.doc)
-			if err != nil {
-				slog.Error("could not write doc json", "err", err)
-				continue
-			}
+func (l *Listener) PublishJob(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
 
-			slog.Debug("updated doc", "len", len(bs))
-			body := bytes.NewBuffer(bs)
-			resp, err := http.Post("http://localhost:3000/api/v1/spec.json", "application/json", body)
-			if err != nil {
-				slog.Warn("could not send doc to server", "err", err)
-			} else {
-				if resp.StatusCode != http.StatusOK {
-					slog.Warn("error status sending doc to server", "status", resp.Status)
-				}
-			}
+	publishTicker := time.Tick(l.publishDuration)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+
+		case r := <-l.requestLogs:
+			l.handleRequestLog(r)
+
+		case <-publishTicker:
+			l.publish()
 		}
 	}
 }
@@ -102,38 +273,30 @@ type stream struct {
 
 func (s *stream) ReassembledRequestResponse(req []byte, res []byte) {
 
+	log := getLogger()
 	r, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(req)))
 	if err != nil {
-		slog.Error("could not read request", "err", err, "len", len(req), "head", string(req[:min(len(req), 32)]))
+		log.Error("could not read request", "err", err, "len", len(req), "head", string(req[:min(len(req), 32)]))
 		return
 	}
 
 	w, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(res)), r)
 	if err != nil {
-		slog.Error("could not read response", "err", err, "len", len(res), "head", string(res[:min(len(res), 32)]))
+		log.Error("could not read response", "err", err, "len", len(res), "head", string(res[:min(len(res), 32)]))
 		return
 	}
 
-	// TODO what do we actually want here?
-	if !strings.Contains(r.Header.Get("Content-Type"), "json") &&
-		!strings.Contains(w.Header.Get("Content-Type"), "json") {
-		slog.Info("skipping", "method", r.Method, "path", r.URL.Path, "status", w.Status, "reason", "not application/json", "r", r.Header.Get("Content-Type"), "w", w.Header.Get("Content-Type"))
-		return
-	}
-
-	slog.Info("handling", "method", r.Method, "path", r.URL.Path, "status", w.Status)
-	// TODO want to handle request / response pairs where we've thrown away the body because its
-	//  something other than an api call (e.g. html or a file).
+	log.Info("handling", "method", r.Method, "path", r.URL.Path, "status", w.Status)
 
 	rb, err := readAllEncoded(r.Header.Get("Content-Encoding"), r.Body)
 	if err != nil {
-		slog.Error("could not read request body", "err", err, "len", len(req), "head", string(req[:min(len(req), 32)]))
+		log.Error("could not read request body", "err", err, "len", len(req), "head", string(req[:min(len(req), 32)]))
 		return
 	}
 
 	wb, err := readAllEncoded(w.Header.Get("Content-Encoding"), w.Body)
 	if err != nil {
-		slog.Error("could not read response body", "err", err, "len", len(res), "head", string(res[:min(len(res), 32)]))
+		log.Error("could not read response body", "err", err, "len", len(res), "head", string(res[:min(len(res), 32)]))
 		return
 	}
 
@@ -155,9 +318,6 @@ type response struct {
 }
 
 func handleRequestResponse(l *Listener, req *request, res *response) {
-	if 500 <= res.inner.StatusCode && res.inner.StatusCode < 600 {
-		return
-	}
 
 	op := openapi3.Operation{}
 	for k, _ := range req.inner.Header {
@@ -192,7 +352,7 @@ func handleRequestResponse(l *Listener, req *request, res *response) {
 	case http.MethodTrace:
 		pathItem.Trace = &op
 	default:
-		log.Fatal("Unknown request method")
+		panic("Unknown request method")
 	}
 
 	nparams := 1
@@ -222,38 +382,45 @@ func handleRequestResponse(l *Listener, req *request, res *response) {
 		}
 	}
 
-	ps := openapi3.Paths{strings.Join(resparts, "/"): &pathItem}
+	path := strings.Join(resparts, "/")
+	ps := openapi3.Paths{path: &pathItem}
+	bs, err := json.Marshal(ps)
+	if err != nil {
+		panic(err)
+	}
 
-	l.mergeQueue <- &openapi3.T{
-		OpenAPI: "3.0.0",
-		Info:    &openapi3.Info{Title: "Example", Version: "0.0.1"},
-		Paths:   ps,
+	log := getLogger()
+	log.Debug("enqueuing request log")
+
+	l.requestLogs <- &RequestLog{
+		Endpoint: Endpoint{Path: path, Method: req.inner.Method},
+		Code:     res.inner.StatusCode,
+		Duration: 0,
+		Schema:   Schema(bs),
 	}
 }
 
 func handleRequestResponseProcRequestBody(req *request, res *response) *openapi3.RequestBodyRef {
 	if len(req.body) == 0 {
+		// maybe still track content type?
 		return nil
 	}
 
-	if res.inner.StatusCode == 400 || (500 <= res.inner.StatusCode && res.inner.StatusCode < 600) {
-		return nil
-	}
-
-	sch, err := infer.ParseSampleBodyBytes(req.body)
-	if err != nil {
-		slog.Warn("error parsing request body as json", "err", err)
-		// could not parse json?
-		return nil
-	}
-
+	log := getLogger()
 	mt := openapi3.NewMediaType()
-	mt.Schema = sch.NewRef()
+	if strings.Contains(req.inner.Header.Get("Content-Type"), "json") {
+		sch, err := infer.ParseSampleBodyBytes(req.body)
+		if err != nil {
+			log.Warn("error parsing request body as json", "err", err)
+			// could not parse json?
+			return nil
+		}
+		mt.Schema = sch.NewRef()
+	}
 
 	rb := openapi3.NewRequestBody()
 	rb.Content = openapi3.Content{}
-	rb.Content["application/json"] = mt
-
+	rb.Content[req.inner.Header.Get("Content-Type")] = mt
 	return &openapi3.RequestBodyRef{Value: rb}
 }
 
@@ -267,18 +434,21 @@ func handleRequestResponseProcResponses(req *request, res *response) openapi3.Re
 		return r
 	}
 
-	sch, err := infer.ParseSampleBodyBytes(res.body)
-	if err != nil {
-		slog.Warn("error parsing response body as json", "err", err)
-		return nil
-	}
+	log := getLogger()
 
 	mt := openapi3.NewMediaType()
-	mt.Schema = sch.NewRef()
+	if strings.Contains(res.inner.Header.Get("Content-Type"), "json") {
+		sch, err := infer.ParseSampleBodyBytes(res.body)
+		if err != nil {
+			log.Warn("error parsing response body as json", "err", err)
+			return nil
+		}
+		mt.Schema = sch.NewRef()
+	}
 
 	rs := openapi3.NewResponse()
 	rs.Content = openapi3.Content{}
-	rs.Content["application/json"] = mt
+	rs.Content[res.inner.Header.Get("Content-Type")] = mt
 
 	if len(res.inner.Header) > 0 {
 		rs.Headers = openapi3.Headers{}
@@ -291,4 +461,8 @@ func handleRequestResponseProcResponses(req *request, res *response) openapi3.Re
 	return openapi3.Responses{
 		strconv.Itoa(res.inner.StatusCode): &openapi3.ResponseRef{Value: rs},
 	}
+}
+
+func getLogger() *slog.Logger {
+	return slog.Default()
 }
