@@ -47,7 +47,7 @@ func (a *HttpAssembler) Assemble(p gopacket.Packet) {
 	a.assembler.AssembleWithContext(p.NetworkLayer().NetworkFlow(), tcp.(*layers.TCP), &c)
 }
 
-func (a *HttpAssembler) FlushOlderThan(t time.Time) {
+func (a *HttpAssembler) FlushCloseOlderThan(t time.Time) {
 	a.assembler.FlushCloseOlderThan(t)
 }
 
@@ -58,7 +58,7 @@ type HttpStreamFactory interface {
 }
 
 type HttpStream interface {
-	ReassembledRequestResponse(req []byte, res []byte)
+	ReassembledRequestResponse(req []byte, res []byte, duration float64)
 }
 
 type factoryWrapper struct {
@@ -93,6 +93,7 @@ type message struct {
 	stop    bool
 	skip    int
 	payload []byte
+	when    int64
 }
 
 type streamWrapper struct {
@@ -105,14 +106,18 @@ type streamWrapper struct {
 }
 
 type side struct {
-	buffer       []byte
-	requestQueue [][]byte
+	buffer             []byte
+	bufferStarts       int64
+	bufferEnds         int64
+	requestQueue       [][]byte
+	requestStartsQueue []int64
 }
 
 func newSide() *side {
 	return &side{
-		buffer:       nil,
-		requestQueue: make([][]byte, 0, 8),
+		buffer:             nil,
+		requestQueue:       make([][]byte, 0, 8),
+		requestStartsQueue: make([]int64, 0, 8),
 	}
 }
 
@@ -141,7 +146,10 @@ func (s *streamWrapper) ReassembledSG(sg reassembly.ScatterGather, ac reassembly
 		stop:    stop,
 		skip:    skip,
 		payload: payload,
+		when:    ac.GetCaptureInfo().Timestamp.UnixMilli(),
 	}
+
+	slog.Debug("packet time", "time", ac.GetCaptureInfo().Timestamp)
 
 	s.messageQueue <- msg
 }
@@ -171,11 +179,14 @@ func (s *streamWrapper) reassembledMessage(msg message) {
 	lhs := s.sides[msg.dir]
 	rhs := s.sides[!msg.dir]
 
-	if len(lhs.buffer) >= 0 {
+	if len(lhs.buffer) > 0 {
 		lhs.buffer = append(lhs.buffer, msg.payload...)
+		lhs.bufferEnds = msg.when
 	} else {
 		// no idea what the cap will be on this
 		lhs.buffer = msg.payload
+		lhs.bufferStarts = msg.when
+		lhs.bufferEnds = msg.when
 	}
 
 	// try request
@@ -192,7 +203,10 @@ func (s *streamWrapper) reassembledMessage(msg message) {
 		}
 
 		lhs.requestQueue = append(lhs.requestQueue, lhs.buffer)
+		lhs.requestStartsQueue = append(lhs.requestStartsQueue, lhs.bufferStarts)
 		lhs.buffer = make([]byte, 0, 512)
+		lhs.bufferStarts = 0
+		lhs.bufferEnds = 0
 		return
 	}
 
@@ -220,12 +234,22 @@ func (s *streamWrapper) reassembledMessage(msg message) {
 
 		if rhsReq != nil {
 			slog.Debug("handled rr")
-			s.wrap.ReassembledRequestResponse(rhs.requestQueue[0], lhs.buffer)
+
+			// should be in seconds
+			duration := float64(lhs.bufferEnds-rhs.requestStartsQueue[0]) / 1000.0
+			slog.Debug("duration", "v", duration, "a", lhs.bufferEnds, "b", rhs.requestStartsQueue[0])
+
+			s.wrap.ReassembledRequestResponse(rhs.requestQueue[0], lhs.buffer, duration)
 			lhs.buffer = nil
+			lhs.bufferStarts = 0
+			lhs.bufferEnds = 0
 			rhs.requestQueue = rhs.requestQueue[1:]
+			rhs.requestStartsQueue = rhs.requestStartsQueue[1:]
 		} else {
 			slog.Debug("dropped rr")
 			lhs.buffer = nil
+			lhs.bufferStarts = 0
+			lhs.bufferEnds = 0
 		}
 
 		return

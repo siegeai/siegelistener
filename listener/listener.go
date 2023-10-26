@@ -12,6 +12,7 @@ import (
 	"github.com/prometheus/common/expfmt"
 	"github.com/siegeai/siegelistener/httpassembly"
 	"github.com/siegeai/siegelistener/infer"
+	"github.com/siegeai/siegelistener/integrations/siegeserver"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -21,25 +22,101 @@ import (
 )
 
 type Listener struct {
-	source          PacketSource
-	publishDuration time.Duration
+	ListenerID      string
+	publishInterval time.Duration
 	publishTime     time.Time
 	requestLogs     chan *RequestLog
 	schemaMetrics   map[Schema]*SchemaMetrics
-	endpointMetrics map[Endpoint]*EndpointMetrics
+	responseMetrics map[ResponseMetricsKey]*ResponseMetrics
 	registry        *prometheus.Registry
+	source          PacketSource
 }
 
-type Endpoint struct {
+func NewListener(source PacketSource) *Listener {
+	return &Listener{
+		source:          source,
+		publishInterval: 15 * time.Second,
+		publishTime:     time.Time{},
+		requestLogs:     make(chan *RequestLog),
+		schemaMetrics:   make(map[Schema]*SchemaMetrics),
+		responseMetrics: make(map[ResponseMetricsKey]*ResponseMetrics),
+		registry:        prometheus.NewRegistry(),
+	}
+}
+
+type ResponseMetricsKey struct {
 	Path   string
 	Method string
+	Status int
 }
 
-type EndpointMetrics struct {
-	Endpoint        Endpoint
-	RequestDuration prometheus.Histogram
-	RequestCount    prometheus.Counter
-	ErrorCount      prometheus.Counter
+// ResponseMetrics may be a lot to track per (path, method, status), especially since
+// we don't have queries for each of these.
+type ResponseMetrics struct {
+	Path     string
+	Method   string
+	Status   int
+	Total    prometheus.Counter
+	Duration prometheus.Histogram
+	Payload  prometheus.Histogram
+}
+
+func NewResponseMetrics(path string, method string, status int) *ResponseMetrics {
+	f := NewPrometheusMetricFactory(path, method, status)
+	return &ResponseMetrics{
+		Path:     path,
+		Method:   method,
+		Status:   status,
+		Total:    f.NewCounter("http_response_total"),
+		Duration: f.NewHistogram("http_response_duration_s"),
+		Payload:  f.NewHistogram("http_response_payload_mb"),
+	}
+}
+
+func (m *ResponseMetrics) Register(r prometheus.Registerer) {
+	r.MustRegister(m.Total, m.Duration, m.Payload)
+}
+
+func (m *ResponseMetrics) HandleRequestLog(r *RequestLog) {
+	// sense check
+	if m.Path != r.Path || m.Method != r.Method || m.Status != r.Status {
+		panic("these metrics are not for the given request log")
+	}
+
+	m.Total.Inc()
+	m.Duration.Observe(r.Duration)
+	m.Payload.Observe(r.Payload)
+}
+
+type PrometheusMetricFactory struct {
+	Namespace string
+	Subsystem string
+	Labels    prometheus.Labels
+}
+
+func NewPrometheusMetricFactory(path string, method string, status int) PrometheusMetricFactory {
+	namespace := "siege"
+	subsystem := "listener"
+	labels := prometheus.Labels{"path": path, "method": method, "status": strconv.Itoa(status)}
+	return PrometheusMetricFactory{Namespace: namespace, Subsystem: subsystem, Labels: labels}
+}
+
+func (f *PrometheusMetricFactory) NewCounter(name string) prometheus.Counter {
+	return prometheus.NewCounter(prometheus.CounterOpts{
+		Name:        name,
+		Namespace:   f.Namespace,
+		Subsystem:   f.Subsystem,
+		ConstLabels: f.Labels,
+	})
+}
+
+func (f *PrometheusMetricFactory) NewHistogram(name string) prometheus.Histogram {
+	return prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name:        name,
+		Namespace:   f.Namespace,
+		Subsystem:   f.Subsystem,
+		ConstLabels: f.Labels,
+	})
 }
 
 type Schema string
@@ -49,80 +126,24 @@ type SchemaMetrics struct {
 	UpdateCount int
 }
 
-func NewEndpointMetrics(e Endpoint) *EndpointMetrics {
-	namespace := "siege"
-	subsystem := "listener"
-	labels := prometheus.Labels{"path": e.Path, "method": e.Method}
-
-	requestDuration := prometheus.NewHistogram(prometheus.HistogramOpts{
-		Name:        "request_duration",
-		Namespace:   namespace,
-		Subsystem:   subsystem,
-		ConstLabels: labels,
-	})
-
-	requestCount := prometheus.NewCounter(prometheus.CounterOpts{
-		Name:        "request_count",
-		Namespace:   namespace,
-		Subsystem:   subsystem,
-		ConstLabels: labels,
-	})
-
-	errorCount := prometheus.NewCounter(prometheus.CounterOpts{
-		Name:        "error_count",
-		Namespace:   namespace,
-		Subsystem:   subsystem,
-		ConstLabels: labels,
-	})
-
-	return &EndpointMetrics{
-		Endpoint:        e,
-		RequestDuration: requestDuration,
-		RequestCount:    requestCount,
-		ErrorCount:      errorCount,
-	}
-}
-
-func (m *EndpointMetrics) Register(reg prometheus.Registerer) {
-	reg.MustRegister(
-		m.RequestCount,
-		m.ErrorCount,
-		m.RequestDuration,
-	)
-}
-
-func (m *EndpointMetrics) HandleRequestLog(r *RequestLog) {
-	if m.Endpoint != r.Endpoint {
-		log := getLogger()
-		log.Error("hit the wrong metrics", "lhs", m.Endpoint, "rhs", r.Endpoint)
-		return
-	}
-
-	m.RequestCount.Inc()
-
-	if 500 <= r.Code && r.Code <= 599 {
-		m.ErrorCount.Inc()
-	}
-
-	m.RequestDuration.Observe(r.Duration.Seconds())
-}
-
-func (l *Listener) getOrCreateEndpointMetrics(e Endpoint) *EndpointMetrics {
-	if m, ok := l.endpointMetrics[e]; ok {
+func (l *Listener) getOrCreateSchemaMetrics(s Schema) *SchemaMetrics {
+	m, in := l.schemaMetrics[s]
+	if in {
 		return m
 	}
-	m := NewEndpointMetrics(e)
-	m.Register(l.registry)
-	l.endpointMetrics[e] = m
+	m = &SchemaMetrics{UpdateTime: time.Time{}, UpdateCount: 0}
+	l.schemaMetrics[s] = m
 	return m
 }
 
-func (l *Listener) getOrCreateSchemaMetrics(s Schema) *SchemaMetrics {
-	if m, ok := l.schemaMetrics[s]; ok {
+func (l *Listener) getOrCreateResponseMetrics(key ResponseMetricsKey) *ResponseMetrics {
+	m, in := l.responseMetrics[key]
+	if in {
 		return m
 	}
-	m := &SchemaMetrics{UpdateTime: time.Time{}, UpdateCount: 0}
-	l.schemaMetrics[s] = m
+	m = NewResponseMetrics(key.Path, key.Method, key.Status)
+	m.Register(l.registry)
+	l.responseMetrics[key] = m
 	return m
 }
 
@@ -131,83 +152,110 @@ func (l *Listener) handleRequestLog(r *RequestLog) {
 	sm.UpdateTime = time.Now()
 	sm.UpdateCount += 1
 
-	em := l.getOrCreateEndpointMetrics(r.Endpoint)
-	em.HandleRequestLog(r)
+	rm := l.getOrCreateResponseMetrics(ResponseMetricsKey{
+		Path:   r.Path,
+		Method: r.Method,
+		Status: r.Status,
+	})
+
+	rm.HandleRequestLog(r)
 }
 
-func (l *Listener) publish() {
+func (l *Listener) encodeMetrics() (string, error) {
 	log := getLogger()
-	log.Debug("publish")
-	defer log.Debug("publish done")
 
-	schemas := make([]Schema, 0, 10)
-	for s, sm := range l.schemaMetrics {
-		if l.publishTime.Before(sm.UpdateTime) {
-			schemas = append(schemas, s)
-		}
-	}
-
-	metrics, err := l.registry.Gather()
+	mfs, err := l.registry.Gather()
 	if err != nil {
-		panic(err)
+		log.Error("gather metrics failed", "err", err)
+		return "", err
 	}
 
 	buf := &bytes.Buffer{}
 	enc := expfmt.NewEncoder(buf, expfmt.FmtText)
-	for _, mf := range metrics {
+	for _, mf := range mfs {
 		if err := enc.Encode(mf); err != nil {
-			log.Error("could not encode metric family")
+			log.Error("encode metrics failed", "err", err)
+			return "", err
 		}
 	}
 
-	req := make(map[string]any)
-	req["listenerID"] = "424242"
-	req["schemas"] = schemas
-	req["metrics"] = buf.String()
+	return buf.String(), nil
+}
 
-	bs, err := json.Marshal(req)
+type RequestLog struct {
+	Path     string
+	Method   string
+	Status   int
+	Duration float64
+	Payload  float64
+	Schema   Schema
+}
+
+func (l *Listener) RegisterStartup() error {
+	// TODO this should retry until it succeeds or the program is killed
+	// TODO this should be used to validate the api key, if the key is bad we'll just
+	//  shutdown
+
+	log := getLogger()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	config, err := siegeserver.NewClient().Startup(ctx)
+	if err != nil {
+		log.Error("listener/startup failed", "err", err)
+		return err
+	}
+
+	slog.Debug("listener/startup", "listenerID", config.ListenerID)
+	l.ListenerID = config.ListenerID
+	return nil
+}
+
+func (l *Listener) RegisterShutdown() {
+	log := getLogger()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := siegeserver.NewClient().Shutdown(ctx, l.ListenerID)
+	if err != nil {
+		log.Error("listener/shutdown failed", "err", err)
+		return
+	}
+
+	slog.Debug("listener/shutdown", "listener_id", l.ListenerID)
+}
+
+func (l *Listener) publish() {
+	log := getLogger()
+
+	schemas := make([]string, 0, 10)
+	for s, sm := range l.schemaMetrics {
+		if l.publishTime.Before(sm.UpdateTime) {
+			schemas = append(schemas, string(s))
+		}
+	}
+
+	metrics, err := l.encodeMetrics()
 	if err != nil {
 		panic(err)
 	}
 
-	log.Debug("publishing metrics", "payload", string(bs))
-
-	resp, err := http.Post(
-		"http://localhost:3000/api/v1/listener/update",
-		"application/json",
-		bytes.NewReader(bs),
-	)
-
-	if err != nil {
-		log.Warn("could not send doc to server", "err", err)
-		return
+	update := siegeserver.ListenerUpdate{
+		ListenerID: l.ListenerID,
+		Schemas:    schemas,
+		Metrics:    metrics,
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		log.Warn("error status sending doc to server", "status", resp.Status)
+	err = siegeserver.NewClient().Update(context.Background(), update)
+	if err != nil {
+		log.Error("listener/update failed", "err", err)
 		return
 	}
 
 	l.publishTime = time.Now()
-}
-
-type RequestLog struct {
-	Endpoint Endpoint
-	Code     int
-	Duration time.Duration
-	Schema   Schema
-}
-
-func NewListener(source PacketSource) *Listener {
-	return &Listener{
-		source:          source,
-		publishDuration: 5 * time.Second,
-		publishTime:     time.Time{},
-		requestLogs:     make(chan *RequestLog),
-		schemaMetrics:   make(map[Schema]*SchemaMetrics),
-		endpointMetrics: make(map[Endpoint]*EndpointMetrics),
-		registry:        prometheus.NewRegistry(),
-	}
+	log.Debug("listener/update")
 }
 
 func (l *Listener) ListenJob(ctx context.Context, wg *sync.WaitGroup) {
@@ -226,7 +274,7 @@ func (l *Listener) ListenJob(ctx context.Context, wg *sync.WaitGroup) {
 			assembler.Assemble(packet)
 
 		case <-flushTicker:
-			assembler.FlushOlderThan(time.Now().Add(time.Minute * -2))
+			assembler.FlushCloseOlderThan(time.Now().Add(time.Minute * -2))
 		}
 	}
 }
@@ -234,7 +282,7 @@ func (l *Listener) ListenJob(ctx context.Context, wg *sync.WaitGroup) {
 func (l *Listener) PublishJob(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	publishTicker := time.Tick(l.publishDuration)
+	publishTicker := time.Tick(l.publishInterval)
 	for {
 		select {
 		case <-ctx.Done():
@@ -271,7 +319,10 @@ type stream struct {
 	l *Listener
 }
 
-func (s *stream) ReassembledRequestResponse(req []byte, res []byte) {
+func (s *stream) ReassembledRequestResponse(req []byte, res []byte, duration float64) {
+
+	// mb
+	payload := float64(len(req)+len(res)) / (1000.0 * 1000.0)
 
 	log := getLogger()
 	r, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(req)))
@@ -302,7 +353,7 @@ func (s *stream) ReassembledRequestResponse(req []byte, res []byte) {
 
 	u := request{inner: r, body: rb}
 	v := response{inner: w, body: wb}
-	handleRequestResponse(s.l, &u, &v)
+	handleRequestResponse(s.l, &u, &v, payload, duration)
 }
 
 // TODO stupid name, parsedRequest?
@@ -317,7 +368,7 @@ type response struct {
 	body  []byte
 }
 
-func handleRequestResponse(l *Listener, req *request, res *response) {
+func handleRequestResponse(l *Listener, req *request, res *response, payload float64, duration float64) {
 
 	op := openapi3.Operation{}
 	for k, _ := range req.inner.Header {
@@ -393,9 +444,11 @@ func handleRequestResponse(l *Listener, req *request, res *response) {
 	log.Debug("enqueuing request log")
 
 	l.requestLogs <- &RequestLog{
-		Endpoint: Endpoint{Path: path, Method: req.inner.Method},
-		Code:     res.inner.StatusCode,
-		Duration: 0,
+		Path:     path,
+		Method:   req.inner.Method,
+		Status:   res.inner.StatusCode,
+		Duration: duration,
+		Payload:  payload,
 		Schema:   Schema(bs),
 	}
 }

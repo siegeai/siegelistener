@@ -36,13 +36,19 @@ func main() {
 	term := make(chan os.Signal, 1)
 	signal.Notify(term, syscall.SIGINT, syscall.SIGTERM)
 
+	l := listener.NewListener(s)
+	err = l.RegisterStartup()
+	if err != nil {
+		return
+	}
+	defer l.RegisterShutdown()
+
 	wg := &sync.WaitGroup{}
 	defer wg.Wait()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	l := listener.NewListener(s)
 	wg.Add(2)
 	go l.ListenJob(ctx, wg)
 	go l.PublishJob(ctx, wg)
