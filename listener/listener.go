@@ -224,7 +224,7 @@ func (l *Listener) RegisterShutdown() {
 		return
 	}
 
-	slog.Debug("listener/shutdown", "listener_id", l.ListenerID)
+	slog.Debug("listener/shutdown", "listenerID", l.ListenerID)
 }
 
 func (l *Listener) publish() {

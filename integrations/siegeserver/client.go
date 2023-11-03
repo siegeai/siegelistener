@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/url"
 )
@@ -20,7 +21,7 @@ func NewClient() *Client {
 	//  locally want http://localhost:3000
 	//  live want something like https://siegeai.com
 	return &Client{
-		APIKey: "",
+		APIKey: "12345",
 		Scheme: "http",
 		Host:   "localhost:3000",
 	}
@@ -38,6 +39,7 @@ func (c *Client) Startup(ctx context.Context) (*ListenerConfig, error) {
 		return nil, err
 	}
 	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", c.APIKey))
 
 	client := http.Client{}
 	res, err := client.Do(req)
@@ -75,6 +77,7 @@ func (c *Client) Shutdown(ctx context.Context, listenerID string) error {
 		panic(err)
 	}
 	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", c.APIKey))
 
 	client := http.Client{}
 	res, err := client.Do(req)
@@ -109,6 +112,7 @@ func (c *Client) Update(ctx context.Context, args ListenerUpdate) error {
 		panic(err)
 	}
 	req.Header.Add("Content-Type", "application/json")
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", c.APIKey))
 
 	if err != nil {
 		return err
