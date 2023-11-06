@@ -30,10 +30,11 @@ type Listener struct {
 	responseMetrics map[ResponseMetricsKey]*ResponseMetrics
 	registry        *prometheus.Registry
 	source          PacketSource
+	Client          *siegeserver.Client
 }
 
-func NewListener(source PacketSource) *Listener {
-	return &Listener{
+func NewListener(source PacketSource, client *siegeserver.Client) (*Listener, error) {
+	listener := &Listener{
 		source:          source,
 		publishInterval: 15 * time.Second,
 		publishTime:     time.Time{},
@@ -41,7 +42,9 @@ func NewListener(source PacketSource) *Listener {
 		schemaMetrics:   make(map[Schema]*SchemaMetrics),
 		responseMetrics: make(map[ResponseMetricsKey]*ResponseMetrics),
 		registry:        prometheus.NewRegistry(),
+		Client:          client,
 	}
+	return listener, nil
 }
 
 type ResponseMetricsKey struct {
@@ -201,7 +204,7 @@ func (l *Listener) RegisterStartup() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	config, err := siegeserver.NewClient().Startup(ctx)
+	config, err := l.Client.Startup(ctx)
 	if err != nil {
 		log.Error("listener/startup failed", "err", err)
 		return err
@@ -218,7 +221,7 @@ func (l *Listener) RegisterShutdown() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	err := siegeserver.NewClient().Shutdown(ctx, l.ListenerID)
+	err := l.Client.Shutdown(ctx, l.ListenerID)
 	if err != nil {
 		log.Error("listener/shutdown failed", "err", err)
 		return
@@ -248,7 +251,7 @@ func (l *Listener) publish() {
 		Metrics:    metrics,
 	}
 
-	err = siegeserver.NewClient().Update(context.Background(), update)
+	err = l.Client.Update(context.Background(), update)
 	if err != nil {
 		log.Error("listener/update failed", "err", err)
 		return

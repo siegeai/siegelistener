@@ -7,24 +7,23 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 )
 
 type Client struct {
 	APIKey string
-	Scheme string
-	Host   string
+	Server string
 }
 
-func NewClient() *Client {
-	// TODO should be configurable via env vars somewhere
-	//  locally want http://localhost:3000
-	//  live want something like https://siegeai.com
-	return &Client{
-		APIKey: "12345",
-		Scheme: "http",
-		Host:   "localhost:3000",
+var (
+	ErrUnexpectedResponse = errors.New("unexpected response code")
+)
+
+func NewClient(apikey, server string) (*Client, error) {
+	client := &Client{
+		APIKey: apikey,
+		Server: server,
 	}
+	return client, nil
 }
 
 type ListenerConfig struct {
@@ -47,8 +46,8 @@ func (c *Client) Startup(ctx context.Context) (*ListenerConfig, error) {
 		return nil, err
 	}
 
-	if res.StatusCode != 200 {
-		return nil, err
+	if res.StatusCode != http.StatusOK {
+		return nil, ErrUnexpectedResponse
 	}
 
 	var config ListenerConfig
@@ -87,7 +86,7 @@ func (c *Client) Shutdown(ctx context.Context, listenerID string) error {
 	}
 
 	if res.StatusCode != http.StatusOK {
-		return errors.New("unexpected status code")
+		return ErrUnexpectedResponse
 	}
 
 	return nil
@@ -126,13 +125,12 @@ func (c *Client) Update(ctx context.Context, args ListenerUpdate) error {
 	}
 
 	if res.StatusCode != http.StatusOK {
-		return errors.New("unexpected status code")
+		return ErrUnexpectedResponse
 	}
 
 	return nil
 }
 
 func (c *Client) formatURL(path string) string {
-	u := url.URL{Scheme: c.Scheme, Host: c.Host, Path: path}
-	return u.String()
+	return fmt.Sprintf("%s%s", c.Server, path)
 }

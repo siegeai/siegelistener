@@ -1,1 +1,7 @@
-.idea
+*.db
+
+.env
+.DS_Store
+src/
+pkg/
+.idea/

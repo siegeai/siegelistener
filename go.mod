@@ -6,10 +6,10 @@ require (
 	github.com/getkin/kin-openapi v0.120.0
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.3.1
-	github.com/gorilla/mux v1.8.0
+	github.com/joho/godotenv v1.5.1
 	github.com/prometheus/client_golang v1.17.0
+	github.com/prometheus/common v0.44.0
 	github.com/stretchr/testify v1.8.4
-	github.com/urfave/negroni v1.0.0
 	github.com/valyala/fastjson v1.6.4
 )
 
@@ -28,7 +28,6 @@ require (
 	github.com/perimeterx/marshmallow v1.1.5 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.4.1-0.20230718164431-9a2bf3000d16 // indirect
-	github.com/prometheus/common v0.44.0 // indirect
 	github.com/prometheus/procfs v0.11.1 // indirect
 	golang.org/x/sys v0.11.0 // indirect
 	google.golang.org/protobuf v1.31.0 // indirect

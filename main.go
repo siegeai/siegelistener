@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"flag"
+	"github.com/joho/godotenv"
+	"github.com/siegeai/siegelistener/integrations/siegeserver"
 	"github.com/siegeai/siegelistener/listener"
 	"log/slog"
 	"os"
@@ -12,31 +13,45 @@ import (
 )
 
 func main() {
-	dev := flag.String("i", "eth0", "Device to get packets from")
-	port := flag.Int("p", 80, "Port to listen on")
-	level := flag.String("l", "info", "Log level")
-	flag.Parse()
+	_ = godotenv.Load()
+	apikey := getEnv("SIEGE_APIKEY", "")
+	device := getEnv("SIEGE_DEVICE", "lo")
+	filter := getEnv("SIEGE_FILTER", "tcp and port 80")
+	server := getEnv("SIEGE_SERVER", "https://dashboard.siegeai.com")
+	level := getEnv("SIEGE_LOG", "warn")
 
-	var logLevel slog.Level
-	err := logLevel.UnmarshalText([]byte(*level))
-	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
-	slog.SetDefault(slog.New(h))
-
-	slog.Info("init", "device", *dev, "port", *port, "logLevel", logLevel)
+	err := setupLogging(level)
 	if err != nil {
-		slog.Warn("unrecognized log level", "l", *level)
+		slog.Error("could not init logging", "err", err)
+		return
 	}
 
-	s, err := listener.NewPacketSourceLive(*dev, *port)
+	if apikey == "" {
+		slog.Error("missing required config option SIEGE_APIKEY")
+		return
+	}
+
+	source, err := listener.NewPacketSourceLive(device, filter)
 	if err != nil {
-		slog.Error("Could not create packet source", "err", err)
+		slog.Error("could not init packet source", "err", err)
+		return
+	}
+
+	client, err := siegeserver.NewClient(apikey, server)
+	if err != nil {
+		slog.Error("could not init client", "err", err)
+		return
+	}
+
+	l, err := listener.NewListener(source, client)
+	if err != nil {
+		slog.Error("could not init listener", "err", err)
 		return
 	}
 
 	term := make(chan os.Signal, 1)
 	signal.Notify(term, syscall.SIGINT, syscall.SIGTERM)
 
-	l := listener.NewListener(s)
 	err = l.RegisterStartup()
 	if err != nil {
 		return
@@ -50,8 +65,25 @@ func main() {
 	defer cancel()
 
 	wg.Add(2)
+
+	slog.Info("listening", "device", device, "filter", filter)
 	go l.ListenJob(ctx, wg)
 	go l.PublishJob(ctx, wg)
 
 	<-term
+}
+
+func setupLogging(level string) error {
+	var logLevel slog.Level
+	err := logLevel.UnmarshalText([]byte(level))
+	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})
+	slog.SetDefault(slog.New(h))
+	return err
+}
+
+func getEnv(key, fallback string) string {
+	if val, ok := os.LookupEnv(key); ok {
+		return val
+	}
+	return fallback
 }
