@@ -374,14 +374,18 @@ type response struct {
 func handleRequestResponse(l *Listener, req *request, res *response, payload float64, duration float64) {
 
 	op := openapi3.Operation{}
-	for k, _ := range req.inner.Header {
-		p := &openapi3.ParameterRef{Value: &openapi3.Parameter{
-			Name: k,
-			In:   "header",
-		}}
-
-		op.Parameters = append(op.Parameters, p)
-	}
+	// header info is bloating schemas a lot, probably want to track across the api as
+	// a whole instead of just per endpoint? or track separately? Not sure about tracking
+	// every combination of header.
+	//
+	//for k, _ := range req.inner.Header {
+	//	p := &openapi3.ParameterRef{Value: &openapi3.Parameter{
+	//		Name: k,
+	//		In:   "header",
+	//	}}
+	//
+	//	op.Parameters = append(op.Parameters, p)
+	//}
 	op.RequestBody = handleRequestResponseProcRequestBody(req, res)
 	op.Responses = handleRequestResponseProcResponses(req, res)
 
@@ -506,13 +510,14 @@ func handleRequestResponseProcResponses(req *request, res *response) openapi3.Re
 	rs.Content = openapi3.Content{}
 	rs.Content[res.inner.Header.Get("Content-Type")] = mt
 
-	if len(res.inner.Header) > 0 {
-		rs.Headers = openapi3.Headers{}
-	}
-
-	for k, _ := range res.inner.Header {
-		rs.Headers[k] = &openapi3.HeaderRef{Value: &openapi3.Header{}}
-	}
+	// same thoughts as the request headers
+	//if len(res.inner.Header) > 0 {
+	//	rs.Headers = openapi3.Headers{}
+	//}
+	//
+	//for k, _ := range res.inner.Header {
+	//	rs.Headers[k] = &openapi3.HeaderRef{Value: &openapi3.Header{}}
+	//}
 
 	return openapi3.Responses{
 		strconv.Itoa(res.inner.StatusCode): &openapi3.ResponseRef{Value: rs},
