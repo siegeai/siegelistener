@@ -18,15 +18,40 @@ import (
 type HttpAssembler struct {
 	pool      *reassembly.StreamPool
 	assembler *reassembly.Assembler
+	factory   *factoryWrapper
+	Log       *slog.Logger
 }
 
 func NewAssembler(factory HttpStreamFactory) *HttpAssembler {
 	f := &factoryWrapper{
-		wrap: factory,
+		wrap:         factory,
+		counter:      0,
+		messageQueue: make(chan message, 128),
+		Log:          slog.Default(),
 	}
 	p := reassembly.NewStreamPool(f)
 	a := reassembly.NewAssembler(p)
-	return &HttpAssembler{pool: p, assembler: a}
+	return &HttpAssembler{
+		pool:      p,
+		assembler: a,
+		factory:   f,
+		Log:       slog.Default(),
+	}
+}
+
+func (a *HttpAssembler) ReassembleJob(ctx context.Context, wg *sync.WaitGroup) {
+	defer wg.Done()
+	a.Log.Debug("reassemble job start")
+	defer a.Log.Debug("reassemble job done")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case msg := <-a.factory.messageQueue:
+			msg.reassemble()
+		}
+	}
 }
 
 type assemblyContext struct {
@@ -53,8 +78,6 @@ func (a *HttpAssembler) FlushCloseOlderThan(t time.Time) {
 
 type HttpStreamFactory interface {
 	New() HttpStream
-	Context() context.Context
-	WaitGroup() *sync.WaitGroup
 }
 
 type HttpStream interface {
@@ -62,16 +85,20 @@ type HttpStream interface {
 }
 
 type factoryWrapper struct {
-	wrap    HttpStreamFactory
-	counter int
+	wrap         HttpStreamFactory
+	counter      int
+	messageQueue chan message
+	Log          *slog.Logger
 }
 
 func (f *factoryWrapper) New(netFlow, tcpFlow gopacket.Flow, tcp *layers.TCP, ac reassembly.AssemblerContext) reassembly.Stream {
 	w := f.wrap.New()
 
 	fsmOptions := reassembly.TCPSimpleFSMOptions{SupportMissingEstablishment: false}
+	sid := f.counter
 	s := streamWrapper{
-		sid:  f.counter,
+		sid:  sid,
+		Log:  slog.Default().With("streamID", sid),
 		wrap: w,
 		fsm:  reassembly.NewTCPSimpleFSM(fsmOptions),
 		opt:  reassembly.NewTCPOptionCheck(),
@@ -79,15 +106,14 @@ func (f *factoryWrapper) New(netFlow, tcpFlow gopacket.Flow, tcp *layers.TCP, ac
 			true:  newSide(),
 			false: newSide(),
 		},
-		messageQueue: make(chan message),
+		messageQueue: f.messageQueue,
 	}
 	f.counter += 1
-	f.wrap.WaitGroup().Add(1)
-	go s.loop(f.wrap.Context(), f.wrap.WaitGroup())
 	return &s
 }
 
 type message struct {
+	s       *streamWrapper
 	dir     reassembly.TCPFlowDirection
 	start   bool
 	stop    bool
@@ -98,6 +124,7 @@ type message struct {
 
 type streamWrapper struct {
 	sid          int
+	Log          *slog.Logger
 	wrap         HttpStream
 	fsm          *reassembly.TCPSimpleFSM
 	opt          reassembly.TCPOptionCheck
@@ -122,7 +149,7 @@ func newSide() *side {
 }
 
 func (s *streamWrapper) Accept(tcp *layers.TCP, ci gopacket.CaptureInfo, dir reassembly.TCPFlowDirection, nextSeq reassembly.Sequence, start *bool, ac reassembly.AssemblerContext) bool {
-	slog.Debug("stream accept", "stream", s.sid, "tcp", tcp.TransportFlow(), "dir", dir)
+	s.Log.Debug("stream accept", "tcp", tcp.TransportFlow(), "dir", dir)
 	return true
 }
 
@@ -134,13 +161,13 @@ func (s *streamWrapper) ReassembledSG(sg reassembly.ScatterGather, ac reassembly
 	}
 
 	dir, start, stop, skip := sg.Info()
-	slog.Debug("stream reassembled", "stream", s.sid, "len", l)
 	if skip > 0 {
-		slog.Warn("dropped bytes", "skip", skip)
+		s.Log.Warn("dropped bytes", "skip", skip)
 	}
 
 	payload := sg.Fetch(l)
 	msg := message{
+		s:       s,
 		dir:     dir,
 		start:   start,
 		stop:    stop,
@@ -149,33 +176,19 @@ func (s *streamWrapper) ReassembledSG(sg reassembly.ScatterGather, ac reassembly
 		when:    ac.GetCaptureInfo().Timestamp.UnixMilli(),
 	}
 
-	slog.Debug("packet time", "time", ac.GetCaptureInfo().Timestamp)
-
 	s.messageQueue <- msg
+
+	s.Log.Debug("stream reassembled sg", "len", l)
 }
 
 func (s *streamWrapper) ReassemblyComplete(ac reassembly.AssemblerContext) bool {
-	slog.Debug("stream reassembly complete", "stream", s.sid)
+	s.Log.Debug("stream reassembly complete")
 	//close(s.messageQueue)
 	return false
 }
 
-func (s *streamWrapper) loop(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
-	slog.Info("stream starting", "stream", s.sid)
-	defer slog.Info("stream done", "stream", s.sid)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case msg := <-s.messageQueue:
-			s.reassembledMessage(msg)
-		}
-	}
-}
-
-func (s *streamWrapper) reassembledMessage(msg message) {
+func (msg *message) reassemble() {
+	s := msg.s
 	lhs := s.sides[msg.dir]
 	rhs := s.sides[!msg.dir]
 
@@ -198,7 +211,7 @@ func (s *streamWrapper) reassembledMessage(msg message) {
 
 		if errors.Is(bodyErr, io.ErrUnexpectedEOF) {
 			// still need more out of the stream
-			slog.Debug("waiting for more request data", "have", len(lhs.buffer))
+			s.Log.Debug("waiting for more request data", "have", len(lhs.buffer))
 			return
 		}
 
@@ -228,16 +241,16 @@ func (s *streamWrapper) reassembledMessage(msg message) {
 
 		if errors.Is(bodyErr, io.ErrUnexpectedEOF) {
 			// still need more out of the stream
-			slog.Debug("waiting for more response data", "have", len(lhs.buffer))
+			s.Log.Debug("waiting for more response data", "have", len(lhs.buffer))
 			return
 		}
 
 		if rhsReq != nil {
-			slog.Debug("handled rr")
+			s.Log.Debug("handled rr")
 
 			// should be in seconds
 			duration := float64(lhs.bufferEnds-rhs.requestStartsQueue[0]) / 1000.0
-			slog.Debug("duration", "v", duration, "a", lhs.bufferEnds, "b", rhs.requestStartsQueue[0])
+			s.Log.Debug("duration", "v", duration, "a", lhs.bufferEnds, "b", rhs.requestStartsQueue[0])
 
 			s.wrap.ReassembledRequestResponse(rhs.requestQueue[0], lhs.buffer, duration)
 			lhs.buffer = nil
@@ -246,7 +259,7 @@ func (s *streamWrapper) reassembledMessage(msg message) {
 			rhs.requestQueue = rhs.requestQueue[1:]
 			rhs.requestStartsQueue = rhs.requestStartsQueue[1:]
 		} else {
-			slog.Debug("dropped rr")
+			s.Log.Debug("dropped rr")
 			lhs.buffer = nil
 			lhs.bufferStarts = 0
 			lhs.bufferEnds = 0

@@ -12,13 +12,16 @@ import (
 	"syscall"
 )
 
+// TODO We should be able to run / test the listener without access to the server
+// TODO Wire loggers up in a sane way instead of this messy nonsense
+
 func main() {
 	_ = godotenv.Load()
 	apikey := getEnv("SIEGE_APIKEY", "")
 	device := getEnv("SIEGE_DEVICE", "lo")
 	filter := getEnv("SIEGE_FILTER", "tcp and port 80")
 	server := getEnv("SIEGE_SERVER", "https://dashboard.siegeai.com")
-	level := getEnv("SIEGE_LOG", "warn")
+	level := getEnv("SIEGE_LOG", "info")
 
 	err := setupLogging(level)
 	if err != nil {
@@ -64,12 +67,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	wg.Add(2)
-
-	slog.Info("listening", "device", device, "filter", filter)
+	wg.Add(3)
 	go l.ListenJob(ctx, wg)
 	go l.PublishJob(ctx, wg)
+	go l.ReassembleJob(ctx, wg)
 
+	slog.Info("listening", "device", device, "filter", filter)
 	<-term
 }
 

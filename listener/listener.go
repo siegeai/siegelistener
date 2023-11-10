@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"github.com/getkin/kin-openapi/openapi3"
@@ -24,26 +25,37 @@ import (
 type Listener struct {
 	ListenerID      string
 	publishInterval time.Duration
-	publishTime     time.Time
 	requestLogs     chan *RequestLog
-	schemaMetrics   map[Schema]*SchemaMetrics
+	schemasToSend   []string
+	schemasSeen     map[[md5.Size]byte]struct{}
 	responseMetrics map[ResponseMetricsKey]*ResponseMetrics
 	registry        *prometheus.Registry
 	source          PacketSource
+	Assembler       *httpassembly.HttpAssembler
 	Client          *siegeserver.Client
+	Log             *slog.Logger
 }
 
 func NewListener(source PacketSource, client *siegeserver.Client) (*Listener, error) {
+	f := &factory{l: nil}
+	assembler := httpassembly.NewAssembler(f)
+
 	listener := &Listener{
 		source:          source,
 		publishInterval: 15 * time.Second,
-		publishTime:     time.Time{},
 		requestLogs:     make(chan *RequestLog),
-		schemaMetrics:   make(map[Schema]*SchemaMetrics),
+		schemasToSend:   nil,
+		schemasSeen:     make(map[[md5.Size]byte]struct{}),
 		responseMetrics: make(map[ResponseMetricsKey]*ResponseMetrics),
 		registry:        prometheus.NewRegistry(),
+		Assembler:       assembler,
 		Client:          client,
+		Log:             slog.Default(),
 	}
+
+	// circular dependency cringe
+	f.l = listener
+
 	return listener, nil
 }
 
@@ -122,23 +134,6 @@ func (f *PrometheusMetricFactory) NewHistogram(name string) prometheus.Histogram
 	})
 }
 
-type Schema string
-
-type SchemaMetrics struct {
-	UpdateTime  time.Time
-	UpdateCount int
-}
-
-func (l *Listener) getOrCreateSchemaMetrics(s Schema) *SchemaMetrics {
-	m, in := l.schemaMetrics[s]
-	if in {
-		return m
-	}
-	m = &SchemaMetrics{UpdateTime: time.Time{}, UpdateCount: 0}
-	l.schemaMetrics[s] = m
-	return m
-}
-
 func (l *Listener) getOrCreateResponseMetrics(key ResponseMetricsKey) *ResponseMetrics {
 	m, in := l.responseMetrics[key]
 	if in {
@@ -151,9 +146,11 @@ func (l *Listener) getOrCreateResponseMetrics(key ResponseMetricsKey) *ResponseM
 }
 
 func (l *Listener) handleRequestLog(r *RequestLog) {
-	sm := l.getOrCreateSchemaMetrics(r.Schema)
-	sm.UpdateTime = time.Now()
-	sm.UpdateCount += 1
+	sum := md5.Sum([]byte(r.Schema))
+	if _, in := l.schemasSeen[sum]; !in {
+		l.schemasSeen[sum] = struct{}{}
+		l.schemasToSend = append(l.schemasToSend, string(r.Schema))
+	}
 
 	rm := l.getOrCreateResponseMetrics(ResponseMetricsKey{
 		Path:   r.Path,
@@ -165,11 +162,8 @@ func (l *Listener) handleRequestLog(r *RequestLog) {
 }
 
 func (l *Listener) encodeMetrics() (string, error) {
-	log := getLogger()
-
 	mfs, err := l.registry.Gather()
 	if err != nil {
-		log.Error("gather metrics failed", "err", err)
 		return "", err
 	}
 
@@ -177,7 +171,6 @@ func (l *Listener) encodeMetrics() (string, error) {
 	enc := expfmt.NewEncoder(buf, expfmt.FmtText)
 	for _, mf := range mfs {
 		if err := enc.Encode(mf); err != nil {
-			log.Error("encode metrics failed", "err", err)
 			return "", err
 		}
 	}
@@ -191,7 +184,7 @@ type RequestLog struct {
 	Status   int
 	Duration float64
 	Payload  float64
-	Schema   Schema
+	Schema   []byte
 }
 
 func (l *Listener) RegisterStartup() error {
@@ -199,47 +192,34 @@ func (l *Listener) RegisterStartup() error {
 	// TODO this should be used to validate the api key, if the key is bad we'll just
 	//  shutdown
 
-	log := getLogger()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
 	config, err := l.Client.Startup(ctx)
 	if err != nil {
-		log.Error("listener/startup failed", "err", err)
 		return err
 	}
 
-	slog.Debug("listener/startup", "listenerID", config.ListenerID)
 	l.ListenerID = config.ListenerID
+	l.Log = l.Log.With("listenerID", l.ListenerID)
+	l.Log.Debug("listener/startup")
 	return nil
 }
 
 func (l *Listener) RegisterShutdown() {
-	log := getLogger()
-
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	err := l.Client.Shutdown(ctx, l.ListenerID)
 	if err != nil {
-		log.Error("listener/shutdown failed", "err", err)
+		l.Log.Error("could not register shutdown", "err", err)
 		return
 	}
 
-	slog.Debug("listener/shutdown", "listenerID", l.ListenerID)
+	l.Log.Debug("listener/shutdown")
 }
 
 func (l *Listener) publish() {
-	log := getLogger()
-
-	schemas := make([]string, 0, 10)
-	for s, sm := range l.schemaMetrics {
-		if l.publishTime.Before(sm.UpdateTime) {
-			schemas = append(schemas, string(s))
-		}
-	}
-
 	metrics, err := l.encodeMetrics()
 	if err != nil {
 		panic(err)
@@ -247,25 +227,26 @@ func (l *Listener) publish() {
 
 	update := siegeserver.ListenerUpdate{
 		ListenerID: l.ListenerID,
-		Schemas:    schemas,
+		Schemas:    l.schemasToSend,
 		Metrics:    metrics,
 	}
 
 	err = l.Client.Update(context.Background(), update)
 	if err != nil {
-		log.Error("listener/update failed", "err", err)
+		l.Log.Error("listener/update failed", "err", err)
 		return
 	}
 
-	l.publishTime = time.Now()
-	log.Debug("listener/update")
+	l.schemasToSend = nil
+	l.Log.Debug("listener/update")
 }
 
 func (l *Listener) ListenJob(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	f := &factory{l: l, ctx: ctx, wg: wg}
-	assembler := httpassembly.NewAssembler(f)
+	l.Log.Debug("listen job start")
+	defer l.Log.Debug("listen job end")
+
 	flushTicker := time.Tick(time.Minute)
 
 	for {
@@ -274,16 +255,19 @@ func (l *Listener) ListenJob(ctx context.Context, wg *sync.WaitGroup) {
 			return
 
 		case packet := <-l.source.Packets():
-			assembler.Assemble(packet)
+			l.Assembler.Assemble(packet)
 
 		case <-flushTicker:
-			assembler.FlushCloseOlderThan(time.Now().Add(time.Minute * -2))
+			l.Assembler.FlushCloseOlderThan(time.Now().Add(time.Minute * -2))
 		}
 	}
 }
 
 func (l *Listener) PublishJob(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
+
+	l.Log.Debug("publish job start")
+	defer l.Log.Debug("publish job end")
 
 	publishTicker := time.Tick(l.publishInterval)
 	for {
@@ -300,63 +284,70 @@ func (l *Listener) PublishJob(ctx context.Context, wg *sync.WaitGroup) {
 	}
 }
 
+func (l *Listener) ReassembleJob(ctx context.Context, wg *sync.WaitGroup) {
+	l.Assembler.ReassembleJob(ctx, wg)
+}
+
 type factory struct {
-	l   *Listener
-	ctx context.Context
-	wg  *sync.WaitGroup
+	l *Listener
 }
 
 func (f *factory) New() httpassembly.HttpStream {
-	return &stream{l: f.l}
-}
-
-func (f *factory) Context() context.Context {
-	return f.ctx
-}
-
-func (f *factory) WaitGroup() *sync.WaitGroup {
-	return f.wg
+	return &stream{
+		Listener: f.l,
+		Log:      slog.Default(),
+	}
 }
 
 type stream struct {
-	l *Listener
+	Listener *Listener
+	Log      *slog.Logger
 }
 
 func (s *stream) ReassembledRequestResponse(req []byte, res []byte, duration float64) {
 
+	// TODO payload value here is gross, duration parameter is gross, where could those come from?
+	// TODO needs to stress test and make sure the listener doesn't fkn die or eat all the memory
+	//  run for a long time with a lot of traffic?
+	//  watch mem use.
+
 	// mb
 	payload := float64(len(req)+len(res)) / (1000.0 * 1000.0)
 
-	log := getLogger()
 	r, err := http.ReadRequest(bufio.NewReader(bytes.NewReader(req)))
 	if err != nil {
-		log.Error("could not read request", "err", err, "len", len(req), "head", string(req[:min(len(req), 32)]))
+		s.Log.Error("could not read request", "err", err)
 		return
 	}
 
 	w, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(res)), r)
 	if err != nil {
-		log.Error("could not read response", "err", err, "len", len(res), "head", string(res[:min(len(res), 32)]))
+		s.Log.Error("could not read response", "err", err)
 		return
 	}
 
-	log.Info("handling", "method", r.Method, "path", r.URL.Path, "status", w.Status)
+	// Skip anything that isn't JSON
+	if !strings.Contains(r.Header.Get("Content-Type"), "json") && !strings.Contains(w.Header.Get("Content-Type"), "json") {
+		s.Log.Debug("skipped", "method", r.Method, "path", r.URL.Path, "status", w.Status)
+		return
+	}
 
 	rb, err := readAllEncoded(r.Header.Get("Content-Encoding"), r.Body)
 	if err != nil {
-		log.Error("could not read request body", "err", err, "len", len(req), "head", string(req[:min(len(req), 32)]))
+		s.Log.Error("could not read request body", "err", err, "method", r.Method, "path", r.URL.Path, "status", w.Status)
 		return
 	}
 
 	wb, err := readAllEncoded(w.Header.Get("Content-Encoding"), w.Body)
 	if err != nil {
-		log.Error("could not read response body", "err", err, "len", len(res), "head", string(res[:min(len(res), 32)]))
+		s.Log.Error("could not read response body", "err", err, "method", r.Method, "path", r.URL.Path, "status", w.Status)
 		return
 	}
 
 	u := request{inner: r, body: rb}
 	v := response{inner: w, body: wb}
-	handleRequestResponse(s.l, &u, &v, payload, duration)
+	s.Listener.handleRequestResponse(&u, &v, payload, duration)
+	s.Log.Debug("handled", "method", r.Method, "path", r.URL.Path, "status", w.Status)
 }
 
 // TODO stupid name, parsedRequest?
@@ -371,7 +362,7 @@ type response struct {
 	body  []byte
 }
 
-func handleRequestResponse(l *Listener, req *request, res *response, payload float64, duration float64) {
+func (l *Listener) handleRequestResponse(req *request, res *response, payload float64, duration float64) {
 
 	op := openapi3.Operation{}
 	// header info is bloating schemas a lot, probably want to track across the api as
@@ -386,8 +377,8 @@ func handleRequestResponse(l *Listener, req *request, res *response, payload flo
 	//
 	//	op.Parameters = append(op.Parameters, p)
 	//}
-	op.RequestBody = handleRequestResponseProcRequestBody(req, res)
-	op.Responses = handleRequestResponseProcResponses(req, res)
+	op.RequestBody = l.handleRequestResponseProcRequestBody(req, res)
+	op.Responses = l.handleRequestResponseProcResponses(req, res)
 
 	pathItem := openapi3.PathItem{}
 	switch req.inner.Method {
@@ -447,8 +438,7 @@ func handleRequestResponse(l *Listener, req *request, res *response, payload flo
 		panic(err)
 	}
 
-	log := getLogger()
-	log.Debug("enqueuing request log")
+	l.Log.Debug("enqueuing request log")
 
 	l.requestLogs <- &RequestLog{
 		Path:     path,
@@ -456,22 +446,21 @@ func handleRequestResponse(l *Listener, req *request, res *response, payload flo
 		Status:   res.inner.StatusCode,
 		Duration: duration,
 		Payload:  payload,
-		Schema:   Schema(bs),
+		Schema:   bs,
 	}
 }
 
-func handleRequestResponseProcRequestBody(req *request, res *response) *openapi3.RequestBodyRef {
+func (l *Listener) handleRequestResponseProcRequestBody(req *request, res *response) *openapi3.RequestBodyRef {
 	if len(req.body) == 0 {
 		// maybe still track content type?
 		return nil
 	}
 
-	log := getLogger()
 	mt := openapi3.NewMediaType()
 	if strings.Contains(req.inner.Header.Get("Content-Type"), "json") {
 		sch, err := infer.ParseSampleBodyBytes(req.body)
 		if err != nil {
-			log.Warn("error parsing request body as json", "err", err)
+			l.Log.Warn("error parsing request body as json", "err", err)
 			// could not parse json?
 			return nil
 		}
@@ -484,7 +473,7 @@ func handleRequestResponseProcRequestBody(req *request, res *response) *openapi3
 	return &openapi3.RequestBodyRef{Value: rb}
 }
 
-func handleRequestResponseProcResponses(req *request, res *response) openapi3.Responses {
+func (l *Listener) handleRequestResponseProcResponses(req *request, res *response) openapi3.Responses {
 	if len(res.body) == 0 {
 		r := openapi3.Responses{
 			strconv.Itoa(res.inner.StatusCode): &openapi3.ResponseRef{
@@ -494,13 +483,11 @@ func handleRequestResponseProcResponses(req *request, res *response) openapi3.Re
 		return r
 	}
 
-	log := getLogger()
-
 	mt := openapi3.NewMediaType()
 	if strings.Contains(res.inner.Header.Get("Content-Type"), "json") {
 		sch, err := infer.ParseSampleBodyBytes(res.body)
 		if err != nil {
-			log.Warn("error parsing response body as json", "err", err)
+			l.Log.Warn("error parsing response body as json", "err", err)
 			return nil
 		}
 		mt.Schema = sch.NewRef()
@@ -522,8 +509,4 @@ func handleRequestResponseProcResponses(req *request, res *response) openapi3.Re
 	return openapi3.Responses{
 		strconv.Itoa(res.inner.StatusCode): &openapi3.ResponseRef{Value: rs},
 	}
-}
-
-func getLogger() *slog.Logger {
-	return slog.Default()
 }
