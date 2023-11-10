@@ -7,6 +7,13 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net/http"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
@@ -14,12 +21,6 @@ import (
 	"github.com/siegeai/siegelistener/httpassembly"
 	"github.com/siegeai/siegelistener/infer"
 	"github.com/siegeai/siegelistener/integrations/siegeserver"
-	"log/slog"
-	"net/http"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
 )
 
 type Listener struct {
@@ -247,7 +248,8 @@ func (l *Listener) ListenJob(ctx context.Context, wg *sync.WaitGroup) {
 	l.Log.Debug("listen job start")
 	defer l.Log.Debug("listen job end")
 
-	flushTicker := time.Tick(time.Minute)
+	flushTicker := time.NewTicker(time.Minute)
+	defer flushTicker.Stop()
 
 	for {
 		select {
@@ -257,7 +259,7 @@ func (l *Listener) ListenJob(ctx context.Context, wg *sync.WaitGroup) {
 		case packet := <-l.source.Packets():
 			l.Assembler.Assemble(packet)
 
-		case <-flushTicker:
+		case <-flushTicker.C:
 			l.Assembler.FlushCloseOlderThan(time.Now().Add(time.Minute * -2))
 		}
 	}
@@ -269,7 +271,9 @@ func (l *Listener) PublishJob(ctx context.Context, wg *sync.WaitGroup) {
 	l.Log.Debug("publish job start")
 	defer l.Log.Debug("publish job end")
 
-	publishTicker := time.Tick(l.publishInterval)
+	publishTicker := time.NewTicker(l.publishInterval)
+	defer publishTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -278,7 +282,7 @@ func (l *Listener) PublishJob(ctx context.Context, wg *sync.WaitGroup) {
 		case r := <-l.requestLogs:
 			l.handleRequestLog(r)
 
-		case <-publishTicker:
+		case <-publishTicker.C:
 			l.publish()
 		}
 	}

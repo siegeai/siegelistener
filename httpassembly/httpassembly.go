@@ -5,14 +5,15 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
-	"github.com/google/gopacket/reassembly"
 	"io"
 	"log/slog"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/reassembly"
 )
 
 type HttpAssembler struct {

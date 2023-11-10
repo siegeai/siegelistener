@@ -790,13 +790,13 @@ func mergeSchemaDifferentType(a, b *openapi3.Schema) *openapi3.Schema {
 func mergeFlatParams(a, b map[string]*openapi3.SchemaRef) []*openapi3.SchemaRef {
 	res := make([]*openapi3.SchemaRef, 0, max(len(a), len(b)))
 	keys := make(map[string]struct{}, max(len(a), len(b)))
-	for k, _ := range a {
+	for k := range a {
 		keys[k] = struct{}{}
 	}
-	for k, _ := range b {
+	for k := range b {
 		keys[k] = struct{}{}
 	}
-	for k, _ := range keys {
+	for k := range keys {
 		var ra *openapi3.SchemaRef
 		if r, in := a[k]; in {
 			ra = r
