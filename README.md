@@ -1,13 +1,29 @@
-Hello `siegelistener`!
+# Welcome to Siege
 
-This program can be run alongside a server to gain insights from network traffic.
-We infer api schemas and track basic api level metrics.
-We don't send request or response bodies to our servers.
-We send sanitized versions of the data including schemas and metrics.
+## Overview
+Siege is a powerful tool designed to generate API documentation and insights directly from network traffic, specifically tailored for high performance engineering teams. By running this listener alongside your server, you gain the ability to infer API schemas and track essential API-level metrics without compromising data privacy or security.
 
-Configuration is done via the following env variables (or entries in a .env file)
-- SIEGE_APIKEY; this should be set to the api key provided to you by siege
-- SIEGE_DEVICE; this determines which device will be listened on. On linux "lo" is good, on mac try "lo0".
-- SIEGE_FILTER; this determines which packets will be analyzed. The more specific the better. We expect tcp. "tcp and port 80", or whichever port you expect traffic on is a good choice.
+## Key Features:
+- API Schema Inference: Automatically deduce the structure of your API traffic.
+- Metric Tracking: Monitor key metrics at the API level.
+- Data Privacy: Request or response bodies are never sent to our servers.
+- Data Sanitization: Only sanitized data, including schemas and metrics, are transmitted.
 
-Also consider setting the env var GOMEMLIMIT to something sensible for your use.
+## Configuration
+Configuring Siege is straightforward and can be done through environment variables or a `.env` file.
+
+## Required Environment Variables:
+SIEGE_APIKEY: Request an API key [here](https://siegeai.com/#contact).
+SIEGE_DEVICE: Specifies the network device to listen on. Use "lo" for Linux and "lo0" for Mac.
+SIEGE_FILTER: Defines the packet filters for analysis. We recommend specific TCP filters like "tcp and port 80".
+
+## Optional Configuration:
+GOMEMLIMIT: Set a memory limit that suits your environment for optimal performance.
+
+## Getting Started
+1. Run the Docker image
+2. Set Up Environment Variables: Refer to the configuration section above.
+3. Run the Tool: Start the program and begin gaining insights from your network traffic.
+
+## Support and Contribution
+For support, feature requests, or to contribute to the project, please visit our GitHub Issues page.
