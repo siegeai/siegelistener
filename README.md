@@ -1,7 +1,7 @@
 # Welcome to Siege
 
 ## Overview
-Siege is a powerful tool designed to generate API documentation and insights directly from network traffic, specifically tailored for high performance engineering teams. By running this listener alongside your server, you gain the ability to infer API schemas and track essential API-level metrics without compromising data privacy or security.
+Siege is a powerful tool designed to generate API documentation and insights directly from network traffic, specifically tailored for high performing engineering teams. By running this listener alongside your server or container, you gain the ability to infer API schemas and track essential API-level metrics without compromising data privacy or security.
 
 ## Key Features:
 - API Schema Inference: Automatically deduce the structure of your API traffic.
