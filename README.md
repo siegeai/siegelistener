@@ -15,7 +15,7 @@ Configuring Siege is straightforward and can be done through environment variabl
 ## Required Environment Variables:
 - `SIEGE_APIKEY`: Request an API key [here](https://siegeai.com/#contact).
 - `SIEGE_DEVICE`: Specifies the network device to listen on. Use "lo" for Linux and "lo0" for Mac.
-- `SIEGE_FILTER`: Defines the packet filters for analysis. We recommend specific TCP filters like "tcp and port 80".
+- `SIEGE_FILTER`: Defines the packet filters for analysis. We recommend specific TCP filters like `tcp and port 80`.
 
 ## Optional Configuration:
 GOMEMLIMIT: Set a memory limit that suits your environment for optimal performance.
