@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: [1.20.x]
+        go-version: [1.21.x]
         os: [ubuntu-latest, ubuntu-20.04, redhat-7, debian-latest]
         include:
           - os: redhat-7
