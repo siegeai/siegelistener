@@ -1,0 +1,43 @@
+# This workflow will build a golang project
+# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-go
+
+name: Build Siege Listener
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: [1.20.x]
+        os: [ubuntu-latest, ubuntu-20.04, redhat-7, debian-latest]
+        include:
+          - os: redhat-7
+            distro: 'rhel/7'
+          - os: debian-latest
+            distro: 'debian/buster'
+          - os: ubuntu-latest
+            distro: 'ubuntu/latest'
+          - os: ubuntu-20.04
+            distro: 'ubuntu/20.04'
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Set up Go ${{ matrix.go-version }}
+      uses: actions/setup-go@v2
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Build for ${{ matrix.distro }}
+      run: |
+        echo "Building for ${GITHUB_WORKFLOW} on ${{ matrix.distro }}"
+        go build -v ./...
+
+    - name: Test
+      run: go test -v ./...
