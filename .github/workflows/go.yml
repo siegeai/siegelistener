@@ -16,20 +16,18 @@ jobs:
          - os: redhat-7
            distro: "rhel/7"
            install_cmd: "yum install -y golang libpcap-devel"
-
-
-     steps:
-    - uses: actions/checkout@v3
-
-    - name: Set up Go ${{ matrix.go-version }}
-      uses: actions/setup-go@v4
-      with:
-        go-version: ${{ matrix.go-version }}
-
-    - name: Build for ${{ matrix.distro }}
-      run: |
-        echo "Building for ${GITHUB_WORKFLOW} on ${{ matrix.distro }}"
-        go build -v ./...
-
-    - name: Test
-      run: go test -v ./...
+    steps:
+      - uses: actions/checkout@v3
+  
+      - name: Set up Go ${{ matrix.go-version }}
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go-version }}
+  
+      - name: Build for ${{ matrix.distro }}
+        run: |
+          echo "Building for ${GITHUB_WORKFLOW} on ${{ matrix.distro }}"
+          go build -v ./...
+  
+      - name: Test
+        run: go test -v ./...
