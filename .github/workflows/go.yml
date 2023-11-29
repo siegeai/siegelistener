@@ -1,4 +1,4 @@
-name: Go Build for Red Hat
+name: Go Multi-OS Build with libpcap
 
 on:
   push:
@@ -9,25 +9,28 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     strategy:
       matrix:
+        go-version: [1.21.x]
         include:
-          - os-version: "7"
-            container: centos:7  # Using CentOS 7 as a close proxy for RHEL 7
-            install-cmd: "yum install -y golang libpcap-devel"
-          - os-version: "9"
-            container: registry.access.redhat.com/ubi9/ubi:latest  # UBI 9 for RHEL 9
-            install-cmd: "yum install -y golang libpcap-devel"
+         - os: redhat-7
+           distro: "rhel/7"
+           install_cmd: "yum install -y golang libpcap-devel"
+
 
     steps:
     - uses: actions/checkout@v3
 
-    - name: Build on RHEL ${{ matrix.os-version }}
+    - name: Set up Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: ${{ matrix.go-version }}
+
+    - name: Build on ${{ matrix.os }} ${{ matrix.version }}
       run: |
-        echo "Building for Red Hat Enterprise Linux version ${matrix.os-version}"
+        echo "Building on ${{ matrix.os }} ${{ matrix.version }}"
         docker run --rm -v $PWD:/app -w /app ${matrix.container} /bin/bash -c "
-          ${matrix.install-cmd};
+          ${matrix.install_cmd};
           go build -v ./...
         "
 
