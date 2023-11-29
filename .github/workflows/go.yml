@@ -19,14 +19,14 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: Install Libpcap
-        run: sudo apt-get install -y golang-go libpcap-dev
+        run: sudo apt-get install -y build-essential golang-go libpcap-dev
         
       - name: Set up Go ${{ matrix.go-version }}
         uses: actions/setup-go@v4
         with:
           go-version: ${{ matrix.go-version }}
   
-     - name: Build for ${{ matrix.distro }}
+      - name: Build for ${{ matrix.distro }}
         run: |
           echo "Building for ${GITHUB_WORKFLOW} on ${{ matrix.distro }}"
           go build -v -o siegelistener ./...
