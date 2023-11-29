@@ -26,10 +26,18 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
   
-      - name: Build for ${{ matrix.distro }}
+     - name: Build for ${{ matrix.distro }}
         run: |
           echo "Building for ${GITHUB_WORKFLOW} on ${{ matrix.distro }}"
-          go build -v ./...
+          go build -v -o siegelistener ./...
   
       - name: Test
         run: go test -v ./...
+
+      - name: Upload binary as an artifact
+        uses: actions/upload-artifact@v2
+        with:
+          name: siegelistener-${{ matrix.os }}-${{ matrix.go-version }}
+          path: ./siegelistener
+
+      
