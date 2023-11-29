@@ -18,21 +18,18 @@ jobs:
            install_cmd: "yum install -y golang libpcap-devel"
 
 
-    steps:
+     steps:
     - uses: actions/checkout@v3
 
-    - name: Set up Go
+    - name: Set up Go ${{ matrix.go-version }}
       uses: actions/setup-go@v4
       with:
         go-version: ${{ matrix.go-version }}
 
-    - name: Build on ${{ matrix.os }} ${{ matrix.version }}
+    - name: Build for ${{ matrix.distro }}
       run: |
-        echo "Building on ${{ matrix.os }} ${{ matrix.version }}"
-        docker run --rm -v $PWD:/app -w /app ${matrix.container} /bin/bash -c "
-          ${matrix.install_cmd};
-          go build -v ./...
-        "
+        echo "Building for ${GITHUB_WORKFLOW} on ${{ matrix.distro }}"
+        go build -v ./...
 
     - name: Test
       run: go test -v ./...
