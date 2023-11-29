@@ -35,9 +35,9 @@ jobs:
         run: go test -v ./...
 
       - name: Upload binary as an artifact
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: siegelistener-${{ matrix.os }}-${{ matrix.go-version }}
-          path: ./siegelistener
+          path: ./binaries
 
       
