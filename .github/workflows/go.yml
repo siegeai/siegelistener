@@ -19,12 +19,20 @@ jobs:
         include:
           - os: redhat-7
             distro: 'rhel/7'
+            install_cmd: "yum install -y golang libpcap-devel"
+          - os: redhat
+            version: "9"
+            container: registry.access.redhat.com/ubi9/ubi:latest
+            install_cmd: "yum install -y golang libpcap-devel"
           - os: debian-latest
             distro: 'debian/buster'
+            install_cmd: "apt-get update && apt-get install -y golang-go libpcap-dev"
           - os: ubuntu-latest
             distro: 'ubuntu/latest'
+            install_cmd: "apt-get update && apt-get install -y golang-go libpcap-dev"
           - os: ubuntu-20.04
             distro: 'ubuntu/20.04'
+            install_cmd: "apt-get update && apt-get install -y golang-go libpcap-dev"
 
     steps:
     - uses: actions/checkout@v3
