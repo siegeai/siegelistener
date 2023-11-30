@@ -15,10 +15,6 @@ jobs:
         include:
           - os: redhat-7
             docker-image: 'registry.access.redhat.com/ubi7/ubi:latest'
-          - os: debian-latest
-            docker-image: 'debian:buster'
-          - os: ubuntu-latest
-            docker-image: 'ubuntu:latest'
     steps:
       - uses: actions/checkout@v3
 
@@ -29,7 +25,7 @@ jobs:
       - name: Build in Docker for ${{ matrix.os }}
         run: |
           docker run --rm -v $PWD:/app -w /app ${{ env.DOCKER_IMAGE }} /bin/bash -c "
-            sudo apt-get update && sudo apt-get install -y build-essential libpcap-dev golang-go ca-certificates || sudo yum update && sudo yum install -y make gcc libpcap-devel golang ca-certificates;
+            apt-get update && apt-get install -y build-essential libpcap-dev golang-go ca-certificates || yum update && yum install -y make gcc libpcap-devel golang ca-certificates;
             go build -v -o ./binaries/siegelistener ./...
           "
   
