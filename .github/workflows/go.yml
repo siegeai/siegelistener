@@ -30,7 +30,6 @@ jobs:
         run: |
           mkdir -p binaries/${{ matrix.os }}
           go build -v -o ./binaries/${{ matrix.os }}/siegelistener
-          done
   
       - name: Upload binaries as artifacts
         uses: actions/upload-artifact@v3
