@@ -1,17 +1,22 @@
-FROM debian:latest
-RUN apt update
-RUN apt install -y build-essential libpcap-dev
+# syntax=docker/dockerfile:1
+FROM golang:1.21-alpine3.18 as builder
+RUN apk add --no-cache alpine-sdk bash ca-certificates libpcap-dev
 
-USER root
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN go build
+
+# Deploy the application binary into a lean image
+FROM alpine:3.18 AS runner
+RUN apk add --no-cache ca-certificates libpcap
 
 WORKDIR /root
-COPY siegelistener siegelistener
-#RUN chmod +x siegelistener
+USER root
 
-ENV SIEGE_APIKEY sdfklj
-ENV SIEGE_SERVER http://host.docker.internal:3000
-ENV SIEGE_DEVICE any
-ENV SIEGE_FILTER "tcp and port 8080"
-ENV SIEGE_LOG debug
+COPY --from=builder /src/siegelistener .
 
-CMD ./siegelistener
+ENTRYPOINT ["/root/siegelistener"]

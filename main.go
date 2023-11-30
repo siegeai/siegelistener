@@ -2,14 +2,15 @@ package main
 
 import (
 	"context"
-	"github.com/joho/godotenv"
-	"github.com/siegeai/siegelistener/integrations/siegeserver"
-	"github.com/siegeai/siegelistener/listener"
 	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
+
+	"github.com/joho/godotenv"
+	"github.com/siegeai/siegelistener/integrations/siegeserver"
+	"github.com/siegeai/siegelistener/listener"
 )
 
 // TODO We should be able to run / test the listener without access to the server
@@ -57,6 +58,7 @@ func main() {
 
 	err = l.RegisterStartup()
 	if err != nil {
+		slog.Error("could not register startup", "err", err)
 		return
 	}
 	defer l.RegisterShutdown()
