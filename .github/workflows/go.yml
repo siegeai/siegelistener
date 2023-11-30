@@ -13,8 +13,8 @@ jobs:
       matrix:
         go-version: [1.21.x]
         include:
-          - os: redhat-7
-            docker-image: 'registry.access.redhat.com/ubi7/ubi:latest'
+          - os: centos-7
+            docker-image: 'centos:7'
     steps:
       - uses: actions/checkout@v3
 
