@@ -30,7 +30,7 @@ jobs:
             tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz &&
             export PATH=/usr/local/go/bin:$PATH &&
             export GOPATH=$HOME/go &&
-            go build -v -o ./binaries/siegelistener ./...
+            go build -v -o ./binaries/${{ matrix.os }}/siegelistener
           "
   
       - name: Upload binaries as artifacts
