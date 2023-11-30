@@ -29,17 +29,13 @@ jobs:
       - name: Build binaries for ${{ matrix.os }}
         run: |
           mkdir -p binaries/${{ matrix.os }}
-          for d in cmd/*; do
-            if [ -d "$d" ]; then
-              app=$(basename $d)
-              go build -v -o ./binaries/${{ matrix.os }}/$app${{ matrix.ext }} ./$d
-            fi
+          go build -v -o ./binaries/${{ matrix.os }}/siegelistener
           done
   
       - name: Upload binaries as artifacts
         uses: actions/upload-artifact@v3
         with:
           name: binaries-${{ matrix.os }}-${{ matrix.go-version }}
-          path: ./binaries/${{ matrix.os }}
+          path: binaries/${{ matrix.os }}
 
       
