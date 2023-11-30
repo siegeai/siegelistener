@@ -15,6 +15,12 @@ jobs:
         include:
          - os: redhat-7
            distro: "rhel/7"
+         - os: debian-latest
+           distro: 'debian/buster'
+         - os: ubuntu-latest
+           distro: 'ubuntu/latest'
+         - os: ubuntu-20.04
+           distro: 'ubuntu/20.04'
     steps:
       - uses: actions/checkout@v3
 
@@ -34,7 +40,7 @@ jobs:
       - name: Upload binaries as artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: binaries-${{ matrix.os }}-${{ matrix.go-version }}
+          name: siegelistener-${{ matrix.os }}-1.0.0
           path: binaries/${{ matrix.os }}
 
       
