@@ -13,29 +13,23 @@ jobs:
       matrix:
         go-version: [1.21.x]
         include:
-         - os: redhat-7
-           distro: "rhel/7"
-         - os: debian-latest
-           distro: 'debian/buster'
-         - os: ubuntu-latest
-           distro: 'ubuntu/latest'
-         - os: ubuntu-20.04
-           distro: 'ubuntu/20.04'
+          - os: redhat-7
+            docker-image: 'registry.access.redhat.com/ubi7/ubi:latest'
+          - os: debian-latest
+            docker-image: 'debian:buster'
+          - os: ubuntu-latest
+            docker-image: 'ubuntu:latest'
+          - os: ubuntu-20.04
+            docker-image: 'ubuntu:20.04'
     steps:
       - uses: actions/checkout@v3
-
-      - name: Install Libpcap
-        run: sudo apt-get install -y build-essential golang-go libpcap-dev
-        
-      - name: Set up Go ${{ matrix.go-version }}
-        uses: actions/setup-go@v4
-        with:
-          go-version: ${{ matrix.go-version }}
-  
-      - name: Build binaries for ${{ matrix.os }}
+      
+      - name: Build in Docker for ${{ matrix.os }}
         run: |
-          mkdir -p binaries/${{ matrix.os }}
-          go build -v -o ./binaries/${{ matrix.os }}/siegelistener
+          docker run --rm -v $PWD:/app -w /app ${matrix.docker-image} /bin/bash -c "
+            apt-get update && apt-get install -y build-essential libpcap-dev golang-go || yum update && yum install -y make gcc libpcap-devel golang;
+            go build -v -o ./binaries/siegelistener ./...
+          "
   
       - name: Upload binaries as artifacts
         uses: actions/upload-artifact@v3
