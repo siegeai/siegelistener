@@ -40,6 +40,6 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: binaries-${{ matrix.os }}-${{ matrix.go-version }}
-          path: binaries/${{ matrix.os }}
+          path: ./binaries/${{ matrix.os }}
 
       
