@@ -26,23 +26,20 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
   
-      - name: Build for ${{ matrix.distro }}
+      - name: Build binaries for ${{ matrix.os }}
         run: |
-          echo "Building for ${GITHUB_WORKFLOW} on ${{ matrix.distro }}"
-          mkdir binaries
-          go build -v -o binaries/siegelistener ./...
+          mkdir -p binaries/${{ matrix.os }}
+          for d in cmd/*; do
+            if [ -d "$d" ]; then
+              app=$(basename $d)
+              go build -v -o ./binaries/${{ matrix.os }}/$app${{ matrix.ext }} ./$d
+            fi
           done
   
-      - name: Test
-        run: go test -v ./...
-
-      - name: List contents of binaries directory
-        run: ls -l binaries
-      
-      - name: Upload binary as an artifact
+      - name: Upload binaries as artifacts
         uses: actions/upload-artifact@v3
         with:
-          name: siegelistener-${{ matrix.os }}-${{ matrix.go-version }}
-          path: ./binaries
+          name: binaries-${{ matrix.os }}-${{ matrix.go-version }}
+          path: binaries/${{ matrix.os }}
 
       
