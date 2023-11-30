@@ -30,7 +30,7 @@ jobs:
       
       - name: Build in Docker for ${{ matrix.os }}
         run: |
-          docker run --rm -v $PWD:/app -w /app ${matrix.docker-image} /bin/bash -c "
+          docker run --rm -v $PWD:/app -w /app ${{ env.DOCKER_IMAGE }} /bin/bash -c "
             apt-get update && apt-get install -y build-essential libpcap-dev golang-go || yum update && yum install -y make gcc libpcap-devel golang;
             go build -v -o ./binaries/siegelistener ./...
           "
