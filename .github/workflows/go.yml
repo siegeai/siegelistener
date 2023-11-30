@@ -30,8 +30,7 @@ jobs:
         run: |
           echo "Building for ${GITHUB_WORKFLOW} on ${{ matrix.distro }}"
           mkdir binaries
-          for d in $(go list -f '{{.Dir}}' ./... | grep '/cmd'); do
-            go build -v -o binaries/$(basename $d) $d
+          go build -v -o binaries/siegelistener ./...
           done
   
       - name: Test
