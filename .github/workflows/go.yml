@@ -23,6 +23,10 @@ jobs:
             docker-image: 'ubuntu:20.04'
     steps:
       - uses: actions/checkout@v3
+
+      - name: Set Docker Image
+        id: set-docker-image
+        run: echo "DOCKER_IMAGE=${{ matrix.docker-image }}" >> $GITHUB_ENV
       
       - name: Build in Docker for ${{ matrix.os }}
         run: |
