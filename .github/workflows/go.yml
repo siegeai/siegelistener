@@ -37,6 +37,9 @@ jobs:
       - name: Test
         run: go test -v ./...
 
+      - name: List contents of binaries directory
+        run: ls -l binaries
+      
       - name: Upload binary as an artifact
         uses: actions/upload-artifact@v3
         with:
