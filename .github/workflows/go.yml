@@ -25,12 +25,12 @@ jobs:
       - name: Build in Docker for ${{ matrix.os }}
         run: |
           docker run --rm -v $PWD:/app -w /app ${{ env.DOCKER_IMAGE }} /bin/bash -c "
-            yum install -y make gcc libpcap-devel wget;
-            wget https://golang.org/dl/go1.21.0.linux-amd64.tar.gz;
-            tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz;
-            echo "export PATH=$PATH:/usr/local/go/bin" >> ~/.bash_profile;
-            echo "export GOPATH=$HOME/go" >> ~/.bash_profile;
-            source ~/.bash_profile;
+            yum install -y make gcc libpcap-devel wget &&
+            wget https://golang.org/dl/go1.21.0.linux-amd64.tar.gz &&
+            tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz &&
+            echo "export PATH=$PATH:/usr/local/go/bin" >> ~/.bash_profile &&
+            echo "export GOPATH=$HOME/go" >> ~/.bash_profile &&
+            source ~/.bash_profile &&
             go build -v -o ./binaries/siegelistener ./...
           "
   
