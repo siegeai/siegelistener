@@ -1,0 +1,36 @@
+version: "3.7"
+
+services:
+  nginx:
+    image: nginx:alpine
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - net-internal
+
+  # faker config taken from:
+  #  https://github.com/dotronglong/faker/wiki/Getting-Started-%5BDocker%5D#docker-compose
+  faker:
+    image: dotronglong/faker:stable
+    volumes:
+      - ./faker/mocks/users.json:/app/mocks/users.json
+    hostname: faker
+    networks:
+      - net-internal
+
+  siege:
+    image: public.ecr.aws/v1v0p1n9/siegelistener:latest
+    network_mode: service:nginx
+    environment:
+      # Your API key goes here
+      # SIEGE_APIKEY: "testing123"
+      SIEGE_FILTER: "tcp"
+      SIEGE_DEVICE: eth0
+      SIEGE_LOG: debug
+
+networks:
+  net-internal:
+    driver: bridge
