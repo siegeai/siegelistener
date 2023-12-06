@@ -10,7 +10,7 @@ Siege is a powerful tool designed to generate API documentation and insights dir
 - Data Sanitization: Only sanitized data, including schemas and metrics, are transmitted.
 
 # Installation
-The Siege Listener can be installed on an system you choose, whether it's in the cloud or on premise, as long as the traffic is unencrypted. For instance, if you have Nginx installed, Siege Listener should be installed behind Nginx, where traffic is decrypted.
+The Siege Listener can be installed on any system you choose, whether it's in the cloud or on premise, as long as the traffic is unencrypted. For instance, if you have Nginx installed, Siege Listener should be installed behind Nginx, where traffic is decrypted.
 
 ## Get your API key
 Request an API key [here](https://siegeai.com/#contact)
