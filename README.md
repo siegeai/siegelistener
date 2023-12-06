@@ -18,43 +18,43 @@ Request an API key [here](https://siegeai.com/#contact)
 ## Docker
 Docker is the fastest and simplest way to install Siege Listener.
 
-### Install via Docker
+#### Install via Docker
 Please go to [Docker website](https://docs.docker.com/engine/install/) to install Docker CE/EE. Choose the right installation guide for your system.
 
-### Install Libpcap dependency
+#### Install Libpcap dependency
 Ubuntu: `sudo apt-get install libpcap-dev` \
 Centos/Redhat: `sudo yum install libpcap-devel` \
 Mac: `brew install libpcap`
 
-### Run
+#### Run
 `docker run -d --network=host -e SIEGE_APIKEY={YOUR SIEGE API KEY} -e SIEGE_FILTER="tcp and port 80" -e SIEGE_LOG=debug public.ecr.aws/v1v0p1n9/siegelistener:latest`
 
 ## Install via binary directly
 You may opt for this method if you want to listen to traffic on the host machine.
 
-### Install Libpcap dependency
+#### Install Libpcap dependency
 Ubuntu: `sudo apt-get install libpcap-dev` \
 Centos/Redhat: `sudo yum install libpcap-devel` \
 Mac: `brew install libpcap`
 
-### Create .env file
+#### Create .env file
 Configuring Siege is straightforward and can be done by creating a `.env` file in the directory of your choice. like such `vi .env`.
 
-## Required Environment Variables:
+#### Required Environment Variables:
 - `SIEGE_APIKEY`: Unique key that identifies your in our multi-tenet infra.
 - `SIEGE_DEVICE`: Specifies the network device to listen on. Use `lo` for Ubuntu, `eth0` for Centos, `lo0` for Mac.
 - `SIEGE_FILTER`: Defines the packet filters for analysis. We recommend specific TCP filters like `tcp and port 80` or `tcp` for all ports.
 
-## Optional Configuration:
+#### Optional Configuration:
 GOMEMLIMIT: Set a memory limit that suits your environment for optimal performance.
 
-## Download binary
+#### Download binary
 Download the latest and greatest binary directly from the [Releases page](https://github.com/siegeai/siegelistener/releases)
 
-## Modify permission
+#### Modify permission
 Make sure the binary is runnable `chmod +x ./siegelistener`
 
-## Run binary
+#### Run binary
 Run binary in background: `./siegelistener &`
 
 ## Access your Siege Dashboard
