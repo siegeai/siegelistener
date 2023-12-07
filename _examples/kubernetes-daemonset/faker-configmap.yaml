@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: faker-config
+data:
+  users.json: |
+    {
+      "plugins": [
+        {
+          "name": "list",
+          "args": {
+            "count": 5,
+            "item": {
+              "id": "#random:int:min=1&max=1000#",
+              "name": "#random:name#",
+              "created_at": "#timestamp#",
+              "updated_at": "#timestamp#"
+            }
+          }
+        },
+        {"name": "random"},
+        {"name": "timestamp"}
+      ],
+      "request": {
+        "method": "GET",
+        "path": "/v1/users/"
+      },
+      "response": {
+        "body": []
+      }
+    }

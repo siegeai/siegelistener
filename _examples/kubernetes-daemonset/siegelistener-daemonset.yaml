@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: siegelistener
+spec:
+  selector:
+    matchLabels:
+      name: siegelistener
+  template:
+    metadata:
+      labels:
+        name: siegelistener
+    spec:
+      containers:
+        - name: siegelistener
+          image: public.ecr.aws/v1v0p1n9/siegelistener:latest
+          env:
+#            - name: SIEGE_APIKEY
+#              value: <Your API Key goes here>
+            - name: SIEGE_DEVICE
+              value: any
+            - name: SIEGE_FILTER
+              value: tcp
+            - name: SIEGE_LOG
+              value: debug
+      hostNetwork: true

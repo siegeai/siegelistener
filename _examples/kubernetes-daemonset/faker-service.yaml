@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: faker-service
+spec:
+  selector:
+    app.kubernetes.io/name: faker-service
+  ports:
+    - name: "80"
+      protocol: TCP
+      port: 80
+      targetPort: http-web-svc

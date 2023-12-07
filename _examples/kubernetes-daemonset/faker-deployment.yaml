@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: faker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: faker
+      app.kubernetes.io/name: faker-service
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        name: faker
+        app.kubernetes.io/name: faker-service
+    spec:
+      containers:
+        - image: dotronglong/faker:stable
+          name: faker
+          ports:
+            - containerPort: 3030
+              name: http-web-svc
+          volumeMounts:
+            - name: faker-config
+              mountPath: /app/mocks/users.json
+              subPath: users.json
+      hostname: faker
+      restartPolicy: Always
+      volumes:
+        - name: faker-config
+          configMap:
+            name: faker-config
+            items:
+              - key: users.json
+                path: users.json
