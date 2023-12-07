@@ -8,8 +8,6 @@ services:
     ports:
       - "80:80"
       - "443:443"
-    networks:
-      - net-internal
 
   # faker config taken from:
   #  https://github.com/dotronglong/faker/wiki/Getting-Started-%5BDocker%5D#docker-compose
@@ -18,8 +16,6 @@ services:
     volumes:
       - ./faker/mocks/users.json:/app/mocks/users.json
     hostname: faker
-    networks:
-      - net-internal
 
   siege:
     image: public.ecr.aws/v1v0p1n9/siegelistener:latest
@@ -30,7 +26,3 @@ services:
       SIEGE_FILTER: "tcp"
       SIEGE_DEVICE: eth0
       SIEGE_LOG: debug
-
-networks:
-  net-internal:
-    driver: bridge
