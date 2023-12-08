@@ -46,7 +46,7 @@ Configuring Siege is straightforward and can be done by creating a `.env` file i
 - `SIEGE_FILTER`: Defines the packet filters for analysis. We recommend specific TCP filters like `tcp and port 80` or `tcp` for all ports.
 
 #### Optional Configuration:
-GOMEMLIMIT: Set a memory limit that suits your environment for optimal performance.
+`GOMEMLIMIT`: Set a memory limit that suits your environment for optimal performance.
 
 #### Download binary
 Download the latest and greatest binary directly from the [Releases page](https://github.com/siegeai/siegelistener/releases)
