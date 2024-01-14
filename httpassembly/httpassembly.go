@@ -32,6 +32,10 @@ func NewAssembler(factory HttpStreamFactory) *HttpAssembler {
 	}
 	p := reassembly.NewStreamPool(f)
 	a := reassembly.NewAssembler(p)
+
+	// a.MaxBufferedPagesPerConnection = 500
+	// a.MaxBufferedPagesTotal = 100000
+
 	return &HttpAssembler{
 		pool:      p,
 		assembler: a,
@@ -150,7 +154,7 @@ func newSide() *side {
 }
 
 func (s *streamWrapper) Accept(tcp *layers.TCP, ci gopacket.CaptureInfo, dir reassembly.TCPFlowDirection, nextSeq reassembly.Sequence, start *bool, ac reassembly.AssemblerContext) bool {
-	s.Log.Debug("stream accept", "tcp", tcp.TransportFlow(), "dir", dir)
+	//s.Log.Debug("stream accept", "tcp", tcp.TransportFlow(), "dir", dir)
 	return true
 }
 
@@ -179,7 +183,7 @@ func (s *streamWrapper) ReassembledSG(sg reassembly.ScatterGather, ac reassembly
 
 	s.messageQueue <- msg
 
-	s.Log.Debug("stream reassembled sg", "len", l)
+	//s.Log.Debug("stream reassembled sg", "len", l)
 }
 
 func (s *streamWrapper) ReassemblyComplete(ac reassembly.AssemblerContext) bool {
@@ -207,12 +211,12 @@ func (msg *message) reassemble() {
 	req, reqErr := http.ReadRequest(bufio.NewReader(bytes.NewReader(lhs.buffer)))
 	if reqErr == nil {
 		// affirmative on the request path
-		_, bodyErr := io.ReadAll(req.Body)
+		_, bodyErr := io.Copy(io.Discard, req.Body)
 		defer req.Body.Close()
 
 		if errors.Is(bodyErr, io.ErrUnexpectedEOF) {
 			// still need more out of the stream
-			s.Log.Debug("waiting for more request data", "have", len(lhs.buffer))
+			//s.Log.Debug("waiting for more request data", "have", len(lhs.buffer))
 			return
 		}
 
@@ -237,21 +241,21 @@ func (msg *message) reassemble() {
 	res, resErr := http.ReadResponse(bufio.NewReader(bytes.NewReader(lhs.buffer)), rhsReq)
 	if resErr == nil {
 		// affirmative on response path
-		_, bodyErr := io.ReadAll(res.Body)
+		_, bodyErr := io.Copy(io.Discard, res.Body)
 		defer res.Body.Close()
 
 		if errors.Is(bodyErr, io.ErrUnexpectedEOF) {
 			// still need more out of the stream
-			s.Log.Debug("waiting for more response data", "have", len(lhs.buffer))
+			//s.Log.Debug("waiting for more response data", "have", len(lhs.buffer))
 			return
 		}
 
 		if rhsReq != nil {
-			s.Log.Debug("handled rr")
+			//s.Log.Debug("handled rr")
 
 			// should be in seconds
 			duration := float64(lhs.bufferEnds-rhs.requestStartsQueue[0]) / 1000.0
-			s.Log.Debug("duration", "v", duration, "a", lhs.bufferEnds, "b", rhs.requestStartsQueue[0])
+			//s.Log.Debug("duration", "v", duration, "a", lhs.bufferEnds, "b", rhs.requestStartsQueue[0])
 
 			s.wrap.ReassembledRequestResponse(rhs.requestQueue[0], lhs.buffer, duration)
 			lhs.buffer = nil
@@ -260,7 +264,7 @@ func (msg *message) reassemble() {
 			rhs.requestQueue = rhs.requestQueue[1:]
 			rhs.requestStartsQueue = rhs.requestStartsQueue[1:]
 		} else {
-			s.Log.Debug("dropped rr")
+			//s.Log.Debug("dropped rr")
 			lhs.buffer = nil
 			lhs.bufferStarts = 0
 			lhs.bufferEnds = 0

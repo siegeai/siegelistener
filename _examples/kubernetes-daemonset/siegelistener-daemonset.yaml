@@ -14,6 +14,7 @@ spec:
       containers:
         - name: siegelistener
           image: public.ecr.aws/v1v0p1n9/siegelistener:latest
+          imagePullPolicy: Always
           env:
 #            - name: SIEGE_APIKEY
 #              value: <Your API Key goes here>

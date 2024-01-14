@@ -246,7 +246,7 @@ func (l *Listener) ListenJob(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	l.Log.Debug("listen job start")
-	defer l.Log.Debug("listen job end")
+	defer l.Log.Debug("listen job done")
 
 	flushTicker := time.NewTicker(time.Minute)
 	defer flushTicker.Stop()
@@ -269,7 +269,7 @@ func (l *Listener) PublishJob(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	l.Log.Debug("publish job start")
-	defer l.Log.Debug("publish job end")
+	defer l.Log.Debug("publish job done")
 
 	publishTicker := time.NewTicker(l.publishInterval)
 	defer publishTicker.Stop()
@@ -442,7 +442,7 @@ func (l *Listener) handleRequestResponse(req *request, res *response, payload fl
 		panic(err)
 	}
 
-	l.Log.Debug("enqueuing request log")
+	//l.Log.Debug("enqueuing request log")
 
 	l.requestLogs <- &RequestLog{
 		Path:     path,
