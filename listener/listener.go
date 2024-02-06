@@ -28,6 +28,7 @@ type Listener struct {
 	publishInterval time.Duration
 	requestLogs     chan *RequestLog
 	schemasToSend   []string
+	eventsToSend    []*infer.EventLog
 	schemasSeen     map[[md5.Size]byte]struct{}
 	responseMetrics map[ResponseMetricsKey]*ResponseMetrics
 	registry        *prometheus.Registry
@@ -45,7 +46,8 @@ func NewListener(source PacketSource, client *siegeserver.Client) (*Listener, er
 		source:          source,
 		publishInterval: 15 * time.Second,
 		requestLogs:     make(chan *RequestLog),
-		schemasToSend:   nil,
+		schemasToSend:   []string{},
+		eventsToSend:    []*infer.EventLog{},
 		schemasSeen:     make(map[[md5.Size]byte]struct{}),
 		responseMetrics: make(map[ResponseMetricsKey]*ResponseMetrics),
 		registry:        prometheus.NewRegistry(),
@@ -160,6 +162,8 @@ func (l *Listener) handleRequestLog(r *RequestLog) {
 	})
 
 	rm.HandleRequestLog(r)
+
+	l.eventsToSend = append(l.eventsToSend, r.EventLog)
 }
 
 func (l *Listener) encodeMetrics() (string, error) {
@@ -186,6 +190,7 @@ type RequestLog struct {
 	Duration float64
 	Payload  float64
 	Schema   []byte
+	EventLog *infer.EventLog
 }
 
 func (l *Listener) RegisterStartup() error {
@@ -230,6 +235,7 @@ func (l *Listener) publish() {
 		ListenerID: l.ListenerID,
 		Schemas:    l.schemasToSend,
 		Metrics:    metrics,
+		Events:     l.eventsToSend,
 	}
 
 	err = l.Client.Update(context.Background(), update)
@@ -238,7 +244,8 @@ func (l *Listener) publish() {
 		return
 	}
 
-	l.schemasToSend = nil
+	l.schemasToSend = []string{}
+	l.eventsToSend = []*infer.EventLog{}
 	l.Log.Debug("listener/update")
 }
 
@@ -381,8 +388,15 @@ func (l *Listener) handleRequestResponse(req *request, res *response, payload fl
 	//
 	//	op.Parameters = append(op.Parameters, p)
 	//}
-	op.RequestBody = l.handleRequestResponseProcRequestBody(req, res)
-	op.Responses = l.handleRequestResponseProcResponses(req, res)
+
+	eventLog := infer.NewEventLog()
+	eventLog.OperationName = req.inner.URL.Path
+	eventLog.Timestamp = time.Now().Unix()
+	eventLog.API["status"] = res.inner.StatusCode
+	eventLog.API["latency"] = duration
+
+	op.RequestBody = l.handleRequestResponseProcRequestBody(req, res, eventLog)
+	op.Responses = l.handleRequestResponseProcResponses(req, res, eventLog)
 
 	pathItem := openapi3.PathItem{}
 	switch req.inner.Method {
@@ -451,10 +465,11 @@ func (l *Listener) handleRequestResponse(req *request, res *response, payload fl
 		Duration: duration,
 		Payload:  payload,
 		Schema:   bs,
+		EventLog: eventLog,
 	}
 }
 
-func (l *Listener) handleRequestResponseProcRequestBody(req *request, res *response) *openapi3.RequestBodyRef {
+func (l *Listener) handleRequestResponseProcRequestBody(req *request, res *response, eventLog *infer.EventLog) *openapi3.RequestBodyRef {
 	if len(req.body) == 0 {
 		// maybe still track content type?
 		return nil
@@ -462,7 +477,7 @@ func (l *Listener) handleRequestResponseProcRequestBody(req *request, res *respo
 
 	mt := openapi3.NewMediaType()
 	if strings.Contains(req.inner.Header.Get("Content-Type"), "json") {
-		sch, err := infer.ParseSampleBodyBytes(req.body)
+		sch, err := infer.ParseSampleBodyBytes(req.body, eventLog)
 		if err != nil {
 			l.Log.Warn("error parsing request body as json", "err", err)
 			// could not parse json?
@@ -477,7 +492,7 @@ func (l *Listener) handleRequestResponseProcRequestBody(req *request, res *respo
 	return &openapi3.RequestBodyRef{Value: rb}
 }
 
-func (l *Listener) handleRequestResponseProcResponses(req *request, res *response) openapi3.Responses {
+func (l *Listener) handleRequestResponseProcResponses(req *request, res *response, eventLog *infer.EventLog) openapi3.Responses {
 	if len(res.body) == 0 {
 		r := openapi3.Responses{
 			strconv.Itoa(res.inner.StatusCode): &openapi3.ResponseRef{
@@ -489,7 +504,7 @@ func (l *Listener) handleRequestResponseProcResponses(req *request, res *respons
 
 	mt := openapi3.NewMediaType()
 	if strings.Contains(res.inner.Header.Get("Content-Type"), "json") {
-		sch, err := infer.ParseSampleBodyBytes(res.body)
+		sch, err := infer.ParseSampleBodyBytes(res.body, eventLog)
 		if err != nil {
 			l.Log.Warn("error parsing response body as json", "err", err)
 			return nil
