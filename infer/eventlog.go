@@ -14,7 +14,7 @@ func NewEventLog() *EventLog {
 		PrimaryID:     make(map[string]any),
 		IDs:           make(map[string]any),
 		OperationName: "",
-		Timestamp:     "",
+		Timestamp:     0,
 		Data:          make(map[string]any),
 		API:           make(map[string]any),
 	}
