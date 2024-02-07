@@ -2,11 +2,9 @@ package main
 
 import (
 	"context"
-	"log"
 	"log/slog"
 	"os"
 	"os/signal"
-	"runtime/pprof"
 	"sync"
 	"syscall"
 
@@ -21,11 +19,11 @@ import (
 func main() {
 	_ = godotenv.Load()
 
-	f, err := os.Create("heap.prof")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer pprof.WriteHeapProfile(f)
+	//f, err := os.Create("heap.prof")
+	//if err != nil {
+	//	log.Fatal(err)
+	//}
+	//defer pprof.WriteHeapProfile(f)
 
 	apikey := getEnv("SIEGE_APIKEY", "")
 	device := getEnv("SIEGE_DEVICE", "lo")
@@ -33,7 +31,7 @@ func main() {
 	server := getEnv("SIEGE_SERVER", "https://dashboard.siegeai.com")
 	level := getEnv("SIEGE_LOG", "info")
 
-	err = setupLogging(level)
+	err := setupLogging(level)
 	if err != nil {
 		slog.Error("could not init logging", "err", err)
 		return
