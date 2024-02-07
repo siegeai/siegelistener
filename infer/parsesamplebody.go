@@ -87,10 +87,11 @@ func parseFastJsonObject(o *fastjson.Object, depth int, _key string, eventLog *E
 	return NewObjectSchema(ps), nil
 }
 
-func parseFastJsonArray(vs []*fastjson.Value, depth int, _key string, eventLog *EventLog) (*openapi3.Schema, error) {
+func parseFastJsonArray(vs []*fastjson.Value, depth int, key string, eventLog *EventLog) (*openapi3.Schema, error) {
 	es := make([]*openapi3.Schema, len(vs))
 	for i, v := range vs {
-		e, err := parseFastJsonValue(v, depth+1, "", eventLog)
+		// cheese pass through of key
+		e, err := parseFastJsonValue(v, depth+1, key, eventLog)
 		if err != nil {
 			return nil, err
 		}
@@ -120,6 +121,11 @@ func keyLooksLikeID(key string) bool {
 }
 
 func handleEventLogValue(eventLog *EventLog, depth int, key string, valueLooksLikeID bool, value any) {
+	if key == "" {
+		// don't add data that doesn't have a key, should only happen if the root of the
+		// doc is not an object
+		return
+	}
 	var isID = valueLooksLikeID
 	if keyLooksLikeID(key) {
 		isID = true

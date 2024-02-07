@@ -390,7 +390,7 @@ func (l *Listener) handleRequestResponse(req *request, res *response, payload fl
 	//}
 
 	eventLog := infer.NewEventLog()
-	eventLog.OperationName = req.inner.URL.Path
+	eventLog.OperationName = strings.ReplaceAll(strings.TrimPrefix(req.inner.URL.Path, "/"), "/", "_")
 	eventLog.Timestamp = time.Now().Unix()
 	eventLog.API["status"] = res.inner.StatusCode
 	eventLog.API["latency"] = duration
