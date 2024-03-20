@@ -47,11 +47,15 @@ func parseFastJsonValue(v *fastjson.Value, depth int, key string, eventLog *Even
 		return parseFastJsonString(s, depth, key, eventLog)
 	case fastjson.TypeNumber:
 		n, err := v.Float64()
-		var np *float64 = nil
 		if err != nil {
-			np = &n
+			return parseFastJsonNumber(&n, depth, key, eventLog)
+		} else {
+			i, err := v.Int64()
+			if err != nil {
+				return parseFastJsonNumberInt(&i, depth, key, eventLog)
+			}
 		}
-		return parseFastJsonNumber(np, depth, key, eventLog)
+		return parseFastJsonNumber(nil, depth, key, eventLog)
 	case fastjson.TypeTrue:
 		return parseFastJsonBool(true, depth, key, eventLog)
 	case fastjson.TypeFalse:
@@ -153,6 +157,13 @@ func parseFastJsonString(s string, depth int, key string, eventLog *EventLog) (*
 }
 
 func parseFastJsonNumber(n *float64, depth int, key string, eventLog *EventLog) (*openapi3.Schema, error) {
+	if eventLog != nil && n != nil {
+		handleEventLogValue(eventLog, depth, key, false, *n)
+	}
+	return NewNumberSchema(), nil
+}
+
+func parseFastJsonNumberInt(n *int64, depth int, key string, eventLog *EventLog) (*openapi3.Schema, error) {
 	if eventLog != nil && n != nil {
 		handleEventLogValue(eventLog, depth, key, false, *n)
 	}
