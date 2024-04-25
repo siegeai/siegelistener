@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"io"
@@ -35,9 +36,14 @@ func handler() http.HandlerFunc {
 			panic(err)
 		}
 
+		gz := gzip.NewWriter(w)
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Encoding", "gzip")
 		w.WriteHeader(http.StatusOK)
-		_, _ = buf.WriteTo(w)
+
+		_, _ = gz.Write(buf.Bytes())
+		_ = gz.Close()
+		//_, _ = buf.WriteTo(gz)
 
 		slog.Info("completed response", "url", r.URL)
 	}

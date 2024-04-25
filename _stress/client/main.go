@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,13 +14,13 @@ import (
 )
 
 func main() {
-	buf := &bytes.Buffer{}
-	call(buf)
+	//buf := &bytes.Buffer{}
+	//call(buf)
 
-	//for i := 0; i < 9; i++ {
-	//	go caller()
-	//}
-	//caller()
+	for i := 0; i < 9; i++ {
+		go caller()
+	}
+	caller()
 }
 
 func caller() {
@@ -39,12 +40,18 @@ func call(buf *bytes.Buffer) {
 	path := fake.String(48)
 	url := fmt.Sprintf("http://localhost:8080/%s", path)
 
-	req, err := http.NewRequest(http.MethodPost, url, buf)
+	buf2 := bytes.Buffer{}
+	gz := gzip.NewWriter(&buf2)
+	_, _ = gz.Write(buf.Bytes())
+	_ = gz.Close()
+
+	req, err := http.NewRequest(http.MethodPost, url, &buf2)
 	if err != nil {
 		panic(err)
 	}
 	//req.Close = true
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "gzip")
 
 	//res, err := client.Do(req)
 	res, err := http.DefaultClient.Do(req)
